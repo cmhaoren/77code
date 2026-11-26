@@ -1276,6 +1276,33 @@ describe("manageSkills", () => {
                 exists(NodePath.join(userHome, ".cursor", "skills", "demote-linked")),
               ),
             ).toBe(false);
+
+            // 9. demote_to_provider also supports demoting a universal pool Junction (like lantu)
+            //    without touching the external canonical repo!
+            const externalDemoteLink = yield* Effect.promise(() =>
+              writeSkill(external, "lantu-demote", "lantu-demote", "External linked skill"),
+            );
+            const universalLantuLink = NodePath.join(universal, "lantu-demote");
+            yield* Effect.promise(() => createJunction(universalLantuLink, externalDemoteLink));
+            const demotedLinkRes = yield* manageSkills(
+              {
+                action: "demote_to_provider",
+                skillName: "lantu-demote",
+                targetInstanceId: ProviderInstanceId.make("claudeAgent"),
+              },
+              options,
+            );
+            expect(demotedLinkRes.ok).toBe(true);
+            expect(yield* Effect.promise(() => exists(universalLantuLink))).toBe(false);
+            expect(yield* Effect.promise(() => exists(externalDemoteLink))).toBe(true);
+            expect(
+              yield* Effect.promise(() =>
+                isLink(NodePath.join(userHome, ".claude", "skills", "lantu-demote")),
+              ),
+            ).toBe(true);
+            expect(
+              demotedLinkRes.overview.skills.find((entry) => entry.name === "lantu-demote")?.scope,
+            ).toBe("agent_global");
           }),
         ),
       ),

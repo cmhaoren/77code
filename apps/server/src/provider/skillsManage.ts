@@ -1197,9 +1197,84 @@ async function demoteToProvider(
     throw skillsError(`真全局池中不存在技能 ${skillName}`);
   }
   const sourcePath = await assertWritableAncestorRealpath(context, foundSource, "真全局池技能目录");
+  const sourcePathKey = normalizeKey(context.platform, sourcePath);
+  const affectedPaths: Array<string> = [];
+
   if (await isLinkPath(sourcePath)) {
-    throw skillsError(`真全局池中的技能 ${skillName} 是联接，无法降级实体`);
+    const realTarget = await readLinkDestination(sourcePath);
+    await requireSkillDirectory(realTarget, "真全局池联接指向的技能目录");
+    const realTargetKey = normalizeKey(context.platform, realTarget);
+    let destinationKey: string | undefined;
+
+    if (targetSpec.driver === "antigravity") {
+      const { manifestPath } = requireAntigravitySpec(targetSpec);
+      await addManifestPaths(context, manifestPath, [realTarget]);
+      affectedPaths.push(manifestPath);
+    } else {
+      const destination = await assertWritableAncestorRealpath(
+        context,
+        NodePath.join(targetSpec.writableGlobalSkillDir, NodePath.basename(sourcePath)),
+        "供应商目标目录",
+      );
+      assertNotManagedRoot(context, destination);
+      destinationKey = normalizeKey(context.platform, destination);
+      if (destinationKey === sourcePathKey) {
+        throw skillsError(`目标实例 ${targetSpec.displayName} 的全局目录就是真全局池`);
+      }
+      if (await pathExists(destination)) {
+        if (
+          !(await isLinkPath(destination)) ||
+          normalizeKey(context.platform, await realpathOrResolved(destination)) !== realTargetKey
+        ) {
+          throw skillsError(`目标目录已存在，拒绝覆盖：${destination}`);
+        }
+      } else {
+        await NodeFSP.mkdir(NodePath.dirname(destination), { recursive: true });
+        await createDirectoryLink(context, destination, realTarget);
+        affectedPaths.push(destination);
+      }
+    }
+
+    await removeLink(sourcePath);
+    affectedPaths.push(sourcePath);
+
+    // Clean up any other provider links that pointed directly through the removed universal link.
+    for (const spec of context.specs) {
+      for (const dedupeRoot of dedupeRootsForSpec(context, spec)) {
+        if (
+          normalizeKey(context.platform, dedupeRoot.root) ===
+          normalizeKey(context.platform, context.universalPoolDir)
+        ) {
+          continue;
+        }
+        const candidate = NodePath.join(dedupeRoot.root, NodePath.basename(sourcePath));
+        if (
+          destinationKey !== undefined &&
+          normalizeKey(context.platform, candidate) === destinationKey
+        ) {
+          continue;
+        }
+        if (!(await isLinkPath(candidate))) continue;
+        const rawTarget = await NodeFSP.readlink(candidate)
+          .then((raw) => NodePath.resolve(NodePath.dirname(candidate), stripWindowsLinkPrefix(raw)))
+          .catch(() => undefined);
+        if (
+          rawTarget !== undefined &&
+          normalizeKey(context.platform, rawTarget) === sourcePathKey
+        ) {
+          await assertWritableAncestorRealpath(context, candidate, "悬空联接清理");
+          await removeLink(candidate);
+          affectedPaths.push(candidate);
+        }
+      }
+    }
+
+    return {
+      summary: `已将联接技能 ${skillName} 从真全局池降级到 ${targetSpec.displayName}（外部源目录保持不变）`,
+      affectedPaths: [...new Set(affectedPaths)],
+    };
   }
+
   await requireSkillDirectory(sourcePath, "真全局池技能目录");
   const sourceRealKey = normalizeKey(context.platform, await realpathOrResolved(sourcePath));
   const destination = await assertWritableAncestorRealpath(
@@ -1208,10 +1283,9 @@ async function demoteToProvider(
     "供应商目标目录",
   );
   assertNotManagedRoot(context, destination);
-  if (normalizeKey(context.platform, destination) === normalizeKey(context.platform, sourcePath)) {
+  if (normalizeKey(context.platform, destination) === sourcePathKey) {
     throw skillsError(`目标实例 ${targetSpec.displayName} 的全局目录就是真全局池`);
   }
-  const affectedPaths: Array<string> = [];
   if (await pathExists(destination)) {
     if (
       (await isLinkPath(destination)) &&
@@ -1228,7 +1302,6 @@ async function demoteToProvider(
 
   // Clean up any links in other provider directories that pointed at the moved universal entity
   // so they are not left dangling.
-  const sourcePathKey = normalizeKey(context.platform, sourcePath);
   for (const spec of context.specs) {
     for (const dedupeRoot of dedupeRootsForSpec(context, spec)) {
       if (

@@ -54,7 +54,15 @@ import {
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Menu, MenuGroupLabel, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Spinner } from "../ui/spinner";
@@ -564,19 +572,21 @@ function SkillDetailRow({
                 {gt("降级为供应商专属…")}
               </MenuTrigger>
               <MenuPopup align="start" className="w-72">
-                <MenuGroupLabel>{gt("选择目标实例")}</MenuGroupLabel>
-                {demoteTargets.map((instance) => (
-                  <MenuItem
-                    key={instance.instanceId}
-                    disabled={actions.busy}
-                    onClick={() => actions.onDemote(entry, instance)}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{instance.displayName}</span>
-                    <span className="shrink-0 text-3xs text-muted-foreground">
-                      {instance.driverGroupLabel}
-                    </span>
-                  </MenuItem>
-                ))}
+                <MenuGroup>
+                  <MenuGroupLabel>{gt("选择目标实例")}</MenuGroupLabel>
+                  {demoteTargets.map((instance) => (
+                    <MenuItem
+                      key={instance.instanceId}
+                      disabled={actions.busy}
+                      onClick={() => actions.onDemote(entry, instance)}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{instance.displayName}</span>
+                      <span className="shrink-0 text-3xs text-muted-foreground">
+                        {instance.driverGroupLabel}
+                      </span>
+                    </MenuItem>
+                  ))}
+                </MenuGroup>
               </MenuPopup>
             </Menu>
           ) : null}
