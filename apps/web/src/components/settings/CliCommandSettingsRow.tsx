@@ -62,36 +62,35 @@ export function CliCommandSettingsRow() {
   const installed = state.installedPath !== null;
   const description = state.shadowedBy
     ? resolve(
-        msg("Another t3 at {path} runs first in a new terminal. Remove it to use T3 Code's.", {
+        msg("路径 {path} 存在其他命令行工具且优先级更高，移除后即可使用 77 Code 的命令。", {
           path: state.shadowedBy,
         }),
       )
     : !installed
-      ? resolve(msg("Run T3 Code's CLI as `t3` from any terminal."))
+      ? resolve(msg("在任意终端通过 `77` 或 `t3` 运行 77 Code 命令行工具。"))
       : state.onPath
         ? resolve(
-            msg("Installed at {path}. Open a new terminal to use it.", {
+            msg("已安装在 {path}（同时支持 `77` 与 `t3` 命令）。打开新终端即可使用。", {
               path: state.installedPath,
             }),
           )
         : state.pathSetup?.added
           ? resolve(
-              msg(
-                "Installed at {path} and added to PATH in {file}. Open a new terminal to use it.",
-                { path: state.installedPath, file: state.pathSetup.file },
-              ),
+              msg("已安装在 {path} 并写入 {file}（同时支持 `77` 与 `t3`）。打开新终端即可使用。", {
+                path: state.installedPath,
+                file: state.pathSetup.file,
+              }),
             )
           : state.pathSetup
             ? resolve(
-                msg("Installed at {path}, which is not on your PATH yet.", {
+                msg("已安装在 {path}，但尚未加入 PATH 环境变量。", {
                   path: state.installedPath,
                 }),
               )
             : resolve(
-                msg(
-                  "Installed at {path}, which is not on your PATH yet. Add its folder to your PATH to run `t3`.",
-                  { path: state.installedPath },
-                ),
+                msg("已安装在 {path}，请将其所在目录加入 PATH 以使用 `77` 或 `t3` 命令。", {
+                  path: state.installedPath,
+                }),
               );
 
   return (

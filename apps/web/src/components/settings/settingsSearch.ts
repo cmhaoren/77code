@@ -963,9 +963,9 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "cli-command",
-    title: msg("t3 command"),
+    title: msg("77 / t3 命令"),
     to: "/settings/about",
-    searchTerms: [msg("cli terminal shell path install command line")],
+    searchTerms: [msg("77 t3 cli terminal shell path install command line")],
     desktopOnly: true,
   },
   {

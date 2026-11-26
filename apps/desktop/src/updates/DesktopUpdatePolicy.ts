@@ -30,10 +30,10 @@ export class DesktopUpdatePolicy extends Context.Service<DesktopUpdatePolicy, Up
 ) {}
 
 export const unmanagedUpdatePolicy: UpdatePolicy = {
-  mode: "off",
+  mode: "auto",
   feedUrl: undefined,
-  allowNightly: false,
-  message: "Official T3 Code auto-updates are disabled in 77 Code.",
+  allowNightly: true,
+  message: null,
 };
 
 function resolveUpdatePolicy(document: ManagedPolicyDocument | undefined): UpdatePolicy {
@@ -76,7 +76,7 @@ const make = Effect.gen(function* () {
             mode: "off",
             feedUrl: undefined,
             allowNightly: false,
-            message: `Updates are off because T3 Code cannot use the managed policy at ${error.path}. Contact your administrator.`,
+            message: `Updates are off because 77 Code cannot use the managed policy at ${error.path}. Contact your administrator.`,
           }),
         ),
     }),

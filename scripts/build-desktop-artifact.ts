@@ -2797,8 +2797,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? "77 Code (Nightly)"
+    : (desktopPackageJson.productName ?? "77 Code");
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (

@@ -1310,6 +1310,18 @@ export const make = Effect.gen(function* () {
           provider: "generic",
           url: policy.feedUrl,
         } as ElectronUpdater.ElectronUpdaterFeedUrl);
+      } else if (
+        Option.isSome(appUpdateYmlConfig) &&
+        appUpdateYmlConfig.value.owner === "pingdotgg" &&
+        appUpdateYmlConfig.value.repo === "t3code"
+      ) {
+        // Guard against stale upstream app-update.yml pulling official T3 Code builds.
+        yield* electronUpdater.setFeedURL({
+          provider: "github",
+          owner: "cmhaoren",
+          repo: "77code",
+          releaseType: "release",
+        } as ElectronUpdater.ElectronUpdaterFeedUrl);
       }
 
       const settings = yield* desktopSettings.get;

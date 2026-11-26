@@ -1163,7 +1163,7 @@ export function MemoDrawer() {
               <div className="min-w-0 flex-1">
                 <SheetTitle>{gt("待办便签")}</SheetTitle>
                 <SheetDescription>
-                  {gt("随手记下想法，点「开始」立刻交给 Agent 执行")}
+                  {gt("随手记下想法，点「开始」立刻交给 Agent 执行；也可以在会话里让 AI 记录待办")}
                 </SheetDescription>
               </div>
             </div>

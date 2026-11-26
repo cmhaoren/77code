@@ -144,6 +144,35 @@ export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment[
     environment.platform === "win32" ? "t3.cmd" : "t3",
   );
 
+const aliasLauncherPath = (environment: DesktopEnvironment.DesktopEnvironment["Service"]) =>
+  environment.path.join(
+    environment.baseDir,
+    "bin",
+    environment.platform === "win32" ? "77.cmd" : "77",
+  );
+
+const writeShimIfOwned = Effect.fn("desktop.cliShim.writeShimIfOwned")(function* (
+  fs: FileSystem.FileSystem,
+  path: DesktopEnvironment.DesktopEnvironment["Service"]["path"],
+  shimPath: string,
+  content: string,
+) {
+  const existing = yield* fs.readFileString(shimPath).pipe(Effect.option);
+  if (Option.isSome(existing) && !existing.value.includes(MARKER)) {
+    yield* logWarning("leaving a CLI launcher the app did not write", { shimPath });
+    return Option.none<string>();
+  }
+  if (Option.getOrUndefined(existing) !== content) {
+    yield* fs.makeDirectory(path.dirname(shimPath), { recursive: true });
+    // Unique per call: backend startup and the first-launch command install can race here.
+    const staging = `${shimPath}.${process.pid}.${yield* Random.nextIntBetween(0, 0xffffff)}.tmp`;
+    yield* fs.writeFileString(staging, content, { mode: 0o755 });
+    yield* fs.rename(staging, shimPath);
+    yield* logInfo("installed CLI launcher", { shimPath });
+  }
+  return Option.some(shimPath);
+});
+
 export const install = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   if (!environment.isPackaged) return Option.none<string>();
@@ -151,6 +180,7 @@ export const install = Effect.gen(function* () {
   const path = environment.path;
   const windows = environment.platform === "win32";
   const shimPath = launcherPath(environment);
+  const aliasPath = aliasLauncherPath(environment);
   const entry = path.join(environment.serverRoot, SERVER_ENTRY);
   const target: CliShimTarget = windows
     ? { kind: "windows", executable: process.execPath, entry }
@@ -163,22 +193,21 @@ export const install = Effect.gen(function* () {
         onNone: () => ({ kind: "direct" as const, executable: process.execPath, entry }),
       });
   const content = renderCliShim({ target, shimPath, t3Home: environment.baseDir });
+  const aliasContent = renderCliShim({ target, shimPath: aliasPath, t3Home: environment.baseDir });
 
   return yield* Effect.gen(function* () {
-    const existing = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    if (Option.isSome(existing) && !existing.value.includes(MARKER)) {
-      yield* logWarning("leaving a t3 launcher the app did not write", { shimPath });
-      return Option.none<string>();
+    const installed = yield* writeShimIfOwned(fs, path, shimPath, content);
+    if (Option.isSome(installed)) {
+      yield* writeShimIfOwned(fs, path, aliasPath, aliasContent).pipe(
+        Effect.catchCause((cause) =>
+          logWarning("could not install 77 CLI alias launcher", {
+            shimPath: aliasPath,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(Option.none<string>())),
+        ),
+      );
     }
-    if (Option.getOrUndefined(existing) !== content) {
-      yield* fs.makeDirectory(path.dirname(shimPath), { recursive: true });
-      // Unique per call: backend startup and the first-launch command install can race here.
-      const staging = `${shimPath}.${process.pid}.${yield* Random.nextIntBetween(0, 0xffffff)}.tmp`;
-      yield* fs.writeFileString(staging, content, { mode: 0o755 });
-      yield* fs.rename(staging, shimPath);
-      yield* logInfo("installed t3 launcher", { shimPath });
-    }
-    return Option.some(shimPath);
+    return installed;
   }).pipe(
     Effect.catchCause((cause) =>
       logWarning("could not install t3 launcher", { shimPath, cause: Cause.pretty(cause) }).pipe(

@@ -2556,7 +2556,7 @@ export function AboutSettingsPanel() {
         {primaryEnvironmentId === null ? null : (
           <SettingsRow
             {...setting("welcome-page")}
-            description={gt("See your agents and import projects.")}
+            description={gt("查看已配置的 Agent 并导入项目。")}
             control={
               <Button size="sm" variant="outline" render={<Link to="/welcome" />}>
                 <T context="verb, opens a page">Open</T>
@@ -2572,7 +2572,7 @@ export function AboutSettingsPanel() {
           description={
             telemetryOff === undefined
               ? gt(
-                  "77 Code runs locally with product telemetry, T3 Connect cloud relay, and official auto-updates disabled.",
+                  "77 Code 完全在本地运行，已关闭官方遥测与云中继；应用更新通过 cmhaoren/77code 仓库获取。",
                 )
               : gt("How 77 Code handles your data. {telemetryOff}", { telemetryOff })
           }
@@ -2590,7 +2590,7 @@ export function AboutSettingsPanel() {
         />
         <SettingsRow
           {...setting("open-source-licenses")}
-          description={gt("Notices for dependencies, assets, and optional tools used by 77 Code.")}
+          description={gt("查看 77 Code 所使用依赖、素材与可选工具的开源许可声明。")}
           control={
             <Button
               render={<Link to="/settings/open-source-licenses" />}
