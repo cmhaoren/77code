@@ -241,6 +241,7 @@ export function SubagentElapsed({ agent }: { agent: Parameters<typeof AgentElaps
 function SubagentAvatar({
   driver,
   displayName,
+  acpRegistryAgentId,
   iconUrl,
   accentColor,
   showBadge,
@@ -250,6 +251,7 @@ function SubagentAvatar({
 }: {
   driver?: ProviderDriverKind | undefined;
   displayName?: string | undefined;
+  acpRegistryAgentId?: string | undefined;
   iconUrl?: string | undefined;
   accentColor?: string | undefined;
   showBadge: boolean;
@@ -270,6 +272,7 @@ function SubagentAvatar({
           driverKind={driver}
           displayName={displayName ?? driver}
           accentColor={accentColor}
+          acpRegistryAgentId={acpRegistryAgentId}
           acpRegistryIconUrl={iconUrl}
           showBadge={showBadge}
           size="compact"
@@ -337,6 +340,18 @@ export function EnvironmentSubagentAvatar({
   const anyInstanceBadge = useAtomValue(providersAtom, (providers) =>
     hasInstanceBadge(entries(providers)),
   );
+  const acpRegistryAgentId = useAtomValue(
+    providersAtom,
+    (providers) =>
+      entries(providers).find((entry) => entry.instanceId === providerInstanceId)
+        ?.acpRegistryAgentId,
+  );
+  const acpRegistryIconUrl = useAtomValue(
+    providersAtom,
+    (providers) =>
+      entries(providers).find((entry) => entry.instanceId === providerInstanceId)
+        ?.acpRegistryIconUrl,
+  );
   const iconUrl = useAtomValue(
     providersAtom,
     (providers) =>
@@ -347,7 +362,8 @@ export function EnvironmentSubagentAvatar({
       {...props}
       driver={providerDriver ?? (remote === undefined ? driver : undefined)}
       displayName={displayName}
-      iconUrl={iconUrl}
+      acpRegistryAgentId={acpRegistryAgentId}
+      iconUrl={acpRegistryIconUrl ?? iconUrl}
       accentColor={accentColor}
       showBadge={showBadge}
       anyInstanceBadge={anyInstanceBadge}
@@ -598,6 +614,7 @@ function SubagentTimelineTooltip(
   // Read providers only in the open popup to avoid per-row subscriptions.
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
   const parent = useThreadShell(props.parentRef)?.source;
   const child = useThreadShell(
     props.threadId ? scopeThreadRef(environmentId, props.threadId) : null,
@@ -615,6 +632,7 @@ function SubagentTimelineTooltip(
       modelSelection={props.modelSelection}
       provider={providers.find((provider) => provider.instanceId === props.providerInstanceId)}
       providers={providers}
+      settings={settings ?? undefined}
       driver={props.driver}
       elapsed={props.elapsed}
       status={props.status}

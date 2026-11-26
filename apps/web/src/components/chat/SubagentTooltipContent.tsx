@@ -3,6 +3,7 @@ import type {
   OrchestrationV2TurnItemStatus,
   OrchestrationProjectShell,
   ServerProvider,
+  ServerSettings,
   ProviderDriverKind,
   ProviderInstanceId,
   OrchestrationV2Subagent,
@@ -29,7 +30,11 @@ import { ThreadHoverCard } from "../ThreadHoverCard";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { cn } from "~/lib/utils";
-import { deriveProviderInstanceEntries, shouldShowInstanceBadge } from "../../providerInstances";
+import {
+  brandProviderInstanceEntries,
+  deriveProviderInstanceEntries,
+  shouldShowInstanceBadge,
+} from "../../providerInstances";
 
 export function SubagentTooltipContent(props: {
   title: string;
@@ -39,6 +44,7 @@ export function SubagentTooltipContent(props: {
   modelSelection?: OrchestrationV2Subagent["modelSelection"];
   provider?: ServerProvider | undefined;
   providers?: ReadonlyArray<ServerProvider> | undefined;
+  settings?: Pick<ServerSettings, "providerInstances"> | undefined;
   driver?: ProviderDriverKind | undefined;
   elapsed?: ReactNode;
   parentThread?: Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath"> | undefined;
@@ -119,7 +125,10 @@ export function SubagentTooltipContent(props: {
         .find(Boolean)
     : undefined;
   const driver = props.provider?.driver ?? props.driver;
-  const entries = deriveProviderInstanceEntries(props.providers ?? []);
+  const derivedEntries = deriveProviderInstanceEntries(props.providers ?? []);
+  const entries = props.settings
+    ? brandProviderInstanceEntries(derivedEntries, props.settings)
+    : derivedEntries;
   const entry = entries.find((candidate) => candidate.instanceId === props.provider?.instanceId);
   const showInstanceBadge = entry !== undefined && shouldShowInstanceBadge(entry, entries);
   const working = ["running", "in_progress", "pending", "waiting"].includes(props.status);
@@ -139,7 +148,8 @@ export function SubagentTooltipContent(props: {
             driverKind={driver}
             displayName={entry?.displayName ?? props.provider?.displayName ?? driver}
             accentColor={entry?.accentColor}
-            acpRegistryIconUrl={props.provider?.iconUrl}
+            acpRegistryAgentId={entry?.acpRegistryAgentId}
+            acpRegistryIconUrl={entry?.acpRegistryIconUrl ?? props.provider?.iconUrl}
             showBadge={showInstanceBadge && entry?.accentColor !== undefined}
             badgeContent="none"
             badgeClassName="h-2 min-w-2 px-0"

@@ -1,6 +1,10 @@
 import type {
   EnvironmentId,
+  ProviderInstanceId,
   ServerGetSkillsOverviewResult,
+  ServerManageSkillsInput,
+  ServerManageSkillsResult,
+  SkillDiskLocation,
   SkillMatrixCell,
   SkillMatrixCellStatus,
   SkillMatrixDiagnostic,
@@ -8,13 +12,27 @@ import type {
   SkillMatrixInstance,
   SkillMatrixScope,
 } from "@t3tools/contracts";
-import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
+import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { useGT } from "gt-react";
-import { ChevronDownIcon, ChevronRightIcon, InfoIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  ArrowUpRightIcon,
+  ArchiveIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  InfoIcon,
+  LayersIcon,
+  Link2Icon,
+  PlusIcon,
+  RefreshCwIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+  WrenchIcon,
+} from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
@@ -24,14 +42,35 @@ import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { formatDateTimeTimestamp } from "../../timestampFormat";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Menu, MenuGroupLabel, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Spinner } from "../ui/spinner";
+import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { DedupeConflictDialog, ImportSkillDialog, SyncSkillsDialog } from "./SkillsManagerDialogs";
 import { SettingsSection } from "./settingsLayout";
+import {
+  countDuplicateSkills,
+  countHiddenDisabledAgentSkills,
+  filterSkillEntries,
+  getDefaultSyncTargetIds,
+  groupInstancesByDriver,
+  resolveSkillSourcePath,
+} from "./skillsMatrix.logic";
 
 interface SkillsMatrixSectionProps {
   readonly environmentId: EnvironmentId;
@@ -41,56 +80,41 @@ const SCOPE_TABS: ReadonlyArray<SkillMatrixScope> = ["universal", "agent_global"
 // Minus sign avoids shipping an em dash in UI copy.
 const MISSING_MARK = "\u2212";
 
-interface DriverColumnGroup {
-  readonly key: string;
-  readonly label: string;
-  readonly instances: ReadonlyArray<SkillMatrixInstance>;
+type CellActionMode = "link" | "copy";
+
+interface SyncDialogRequest {
+  readonly sourceInstanceId?: ProviderInstanceId;
+  readonly skillName?: string;
+  readonly entry?: SkillMatrixEntry;
+  readonly initialTargetIds?: ReadonlyArray<ProviderInstanceId>;
+  readonly missingInstanceIds?: ReadonlyArray<ProviderInstanceId>;
+}
+
+interface SkillMatrixActions {
+  readonly busy: boolean;
+  readonly universalPoolDir: string;
+  readonly onLinkUniversalPool: (instance: SkillMatrixInstance) => void;
+  readonly onSyncFromInstance: (instance: SkillMatrixInstance) => void;
+  readonly onMount: (
+    entry: SkillMatrixEntry,
+    instance: SkillMatrixInstance,
+    mode: CellActionMode,
+  ) => void;
+  readonly onFix: (entry: SkillMatrixEntry, instance: SkillMatrixInstance) => void;
+  readonly onUnmount: (entry: SkillMatrixEntry, instance: SkillMatrixInstance) => void;
+  readonly onDedupe: (entry: SkillMatrixEntry) => void;
+  readonly onSyncSkill: (entry: SkillMatrixEntry) => void;
+  readonly onPromote: (entry: SkillMatrixEntry) => void;
+  readonly onDemote: (entry: SkillMatrixEntry, instance: SkillMatrixInstance) => void;
+  readonly onBackup: (entry: SkillMatrixEntry) => void;
 }
 
 function isSkillMatrixScope(value: string | undefined): value is SkillMatrixScope {
   return value !== undefined && (SCOPE_TABS as ReadonlyArray<string>).includes(value);
 }
 
-function groupInstancesByDriver(
-  instances: ReadonlyArray<SkillMatrixInstance>,
-): ReadonlyArray<DriverColumnGroup> {
-  const groups: Array<{
-    readonly key: string;
-    readonly label: string;
-    readonly instances: Array<SkillMatrixInstance>;
-  }> = [];
-  const byKey = new Map<
-    string,
-    {
-      readonly key: string;
-      readonly label: string;
-      readonly instances: Array<SkillMatrixInstance>;
-    }
-  >();
-  for (const instance of instances) {
-    let group = byKey.get(instance.driverGroupKey);
-    if (!group) {
-      group = {
-        key: instance.driverGroupKey,
-        label: instance.driverGroupLabel,
-        instances: [],
-      };
-      byKey.set(instance.driverGroupKey, group);
-      groups.push(group);
-    }
-    group.instances.push(instance);
-  }
-  return groups;
-}
-
-function hasIssueInDisplayedInstances(
-  entry: SkillMatrixEntry,
-  instances: ReadonlyArray<SkillMatrixInstance>,
-): boolean {
-  return instances.some((instance) => {
-    const status = entry.cells[instance.instanceId]?.status;
-    return status === "missing" || status === "disk_warning";
-  });
+function normalizePathForCompare(path: string): string {
+  return path.replaceAll("\\", "/").replace(/\/+$/u, "").toLowerCase();
 }
 
 function SkillStatusLabel({ status }: { readonly status: SkillMatrixCellStatus }) {
@@ -106,6 +130,18 @@ function SkillStatusLabel({ status }: { readonly status: SkillMatrixCellStatus }
       return <>{gt("未挂载 / 声明不到")}</>;
     case "not_applicable":
       return <>{gt("不适用")}</>;
+  }
+}
+
+function SkillLayerLabel({ layer }: { readonly layer: SkillDiskLocation["layer"] }) {
+  const gt = useGT();
+  switch (layer) {
+    case "universal":
+      return <>{gt("真全局")}</>;
+    case "provider_global":
+      return <>{gt("供应商全局")}</>;
+    case "instance_manifest":
+      return <>{gt("实例清单")}</>;
   }
 }
 
@@ -130,216 +166,431 @@ function coverageToneClass(entry: SkillMatrixEntry): string {
   return "text-success";
 }
 
-function InstanceColumnHeader({ instance }: { readonly instance: SkillMatrixInstance }) {
+function InstanceColumnHeader({
+  instance,
+  actions,
+}: {
+  readonly instance: SkillMatrixInstance;
+  readonly actions: SkillMatrixActions;
+}) {
   const gt = useGT();
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<span className="inline-flex min-w-0 flex-col items-center gap-0.5" />}
+    <Menu>
+      <MenuTrigger
+        aria-label={gt("管理实例 {name}", { name: instance.displayName })}
+        className="group inline-flex min-w-0 max-w-[108px] flex-col items-center gap-0.5 rounded-md px-1 py-0.5 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        render={<button type="button" />}
       >
         <span
           className={cn(
-            "max-w-[68px] truncate text-2xs font-medium",
+            "max-w-[108px] truncate text-2xs font-medium",
             instance.enabled ? "text-foreground/85" : "text-muted-foreground",
           )}
         >
           {instance.displayName}
         </span>
-        {instance.enabled ? null : (
+        {instance.enabled ? (
+          <ChevronDownIcon
+            className="size-2.5 text-muted-foreground/60 opacity-40 transition-opacity group-hover:opacity-100 group-data-popup-open:opacity-100"
+            aria-hidden
+          />
+        ) : (
           <span className="text-4xs leading-none text-muted-foreground">{gt("已停用")}</span>
         )}
-      </TooltipTrigger>
-      <TooltipPopup side="top">
-        <div className="space-y-0.5">
-          <div className="font-medium">
-            {instance.displayName} ({instance.driverGroupLabel})
+      </MenuTrigger>
+      <MenuPopup align="center" className="w-80">
+        <div className="space-y-1 px-2 py-1.5">
+          <div className="text-xs font-semibold text-foreground">{instance.displayName}</div>
+          <div className="text-2xs text-muted-foreground">{instance.driverGroupLabel}</div>
+          <div className="break-all font-mono text-3xs text-muted-foreground">
+            {instance.driver} · {instance.instanceId}
           </div>
-          <div className="font-mono text-3xs text-muted-foreground">{instance.instanceId}</div>
-          <div className="text-3xs text-muted-foreground">
+          <div className="text-2xs">
             {instance.readsUniversalPool
               ? gt("原生扫描 ~/.agents/skills 真全局池")
               : gt("不自动扫描 ~/.agents/skills（需显式挂载）")}
           </div>
-          {instance.globalSkillDirs.length > 0 ? (
-            <div className="pt-0.5">
-              <div className="text-3xs font-medium text-foreground/80">{gt("实际扫描目录：")}</div>
-              {instance.globalSkillDirs.map((dir) => (
+          <div className="text-3xs text-muted-foreground">
+            {instance.enabled ? gt("已启用") : gt("已停用")}
+          </div>
+          <div className="space-y-0.5 pt-1">
+            <div className="text-3xs font-medium text-foreground/80">{gt("实际扫描目录：")}</div>
+            {instance.globalSkillDirs.length === 0 ? (
+              <div className="text-3xs text-muted-foreground">{gt("无")}</div>
+            ) : (
+              instance.globalSkillDirs.map((dir) => (
                 <div key={dir} className="break-all font-mono text-3xs text-muted-foreground">
                   {dir}
                 </div>
-              ))}
-            </div>
-          ) : null}
-          {instance.enabled ? null : (
-            <div className="text-3xs text-warning">{gt("该实例已停用")}</div>
-          )}
+              ))
+            )}
+          </div>
         </div>
-      </TooltipPopup>
-    </Tooltip>
+        <MenuSeparator />
+        {instance.readsUniversalPool ? null : (
+          <MenuItem disabled={actions.busy} onClick={() => actions.onLinkUniversalPool(instance)}>
+            <Link2Icon />
+            {gt("一键联接真全局池")}
+          </MenuItem>
+        )}
+        <MenuItem disabled={actions.busy} onClick={() => actions.onSyncFromInstance(instance)}>
+          <RefreshCwIcon />
+          {gt("将此实例技能同步到其他实例…")}
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
   );
 }
 
-function CellStatusMarker({ cell }: { readonly cell: SkillMatrixCell | undefined }) {
-  const gt = useGT();
+function CellStatusGlyph({ cell }: { readonly cell: SkillMatrixCell | undefined }) {
   const status = cell?.status ?? "not_applicable";
 
   if (status === "declared_runtime") {
     return (
-      <Tooltip>
-        <TooltipTrigger
-          render={<span className="inline-flex size-4 items-center justify-center" />}
-        >
-          <span className="size-2 rounded-full bg-success" />
-        </TooltipTrigger>
-        <TooltipPopup side="top">
-          <div className="space-y-0.5">
-            <div className="font-medium">{gt("运行态已声明")}</div>
-            {cell?.path ? (
-              <div className="break-all font-mono text-3xs text-muted-foreground">{cell.path}</div>
-            ) : null}
-          </div>
-        </TooltipPopup>
-      </Tooltip>
+      <span className="inline-flex size-4 items-center justify-center">
+        <span className="size-2 rounded-full bg-success" />
+      </span>
     );
   }
-
   if (status === "declared_disk") {
     return (
-      <Tooltip>
-        <TooltipTrigger
-          render={<span className="inline-flex size-4 items-center justify-center" />}
-        >
-          <span className="inline-flex size-2.5 items-center justify-center rounded-full border border-info">
-            <span className="size-1 rounded-full bg-info" />
-          </span>
-        </TooltipTrigger>
-        <TooltipPopup side="top">
-          <div className="space-y-0.5">
-            <div className="font-medium">{gt("目录就绪（按驱动规则可声明）")}</div>
-            {cell?.reason ? <div className="text-muted-foreground">{cell.reason}</div> : null}
-            {cell?.path ? (
-              <div className="break-all font-mono text-3xs text-muted-foreground">{cell.path}</div>
-            ) : null}
-            {cell?.linkTarget ? (
-              <div className="break-all font-mono text-3xs text-muted-foreground">
-                → {cell.linkTarget}
-              </div>
-            ) : null}
-          </div>
-        </TooltipPopup>
-      </Tooltip>
+      <span className="inline-flex size-4 items-center justify-center">
+        <span className="inline-flex size-2.5 items-center justify-center rounded-full border border-info">
+          <span className="size-1 rounded-full bg-info" />
+        </span>
+      </span>
     );
   }
-
   if (status === "disk_warning") {
     return (
-      <Tooltip>
-        <TooltipTrigger
-          render={<span className="inline-flex size-4 items-center justify-center" />}
-        >
-          <TriangleAlertIcon className="size-3 text-warning" />
-        </TooltipTrigger>
-        <TooltipPopup side="top">
-          <div className="space-y-0.5">
-            <div className="font-medium text-warning">{gt("磁盘存在但可能未被声明")}</div>
-            {cell?.reason ? <div className="text-muted-foreground">{cell.reason}</div> : null}
-            {cell?.path ? (
-              <div className="break-all font-mono text-3xs text-muted-foreground">{cell.path}</div>
-            ) : null}
-            {cell?.linkTarget ? (
-              <div className="break-all font-mono text-3xs text-muted-foreground">
-                → {cell.linkTarget}
-              </div>
-            ) : null}
-          </div>
-        </TooltipPopup>
-      </Tooltip>
+      <span className="inline-flex size-4 items-center justify-center">
+        <TriangleAlertIcon className="size-3 text-warning" />
+      </span>
     );
   }
-
   if (status === "missing") {
     return (
+      <span className="inline-flex size-4 items-center justify-center">
+        <span className="text-xs leading-none text-muted-foreground/55">{MISSING_MARK}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex size-4 items-center justify-center">
+      <span className="text-3xs leading-none text-muted-foreground/30">·</span>
+    </span>
+  );
+}
+
+function CellPathLine({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <div className="space-y-0.5">
+      <div className="text-3xs font-medium text-foreground/80">{label}</div>
+      <div className="break-all font-mono text-3xs text-muted-foreground">{value}</div>
+    </div>
+  );
+}
+
+function SkillCellPopover({
+  entry,
+  instance,
+  cell,
+  sharedDirSiblings,
+  actions,
+}: {
+  readonly entry: SkillMatrixEntry;
+  readonly instance: SkillMatrixInstance;
+  readonly cell: SkillMatrixCell | undefined;
+  readonly sharedDirSiblings: ReadonlyArray<string>;
+  readonly actions: SkillMatrixActions;
+}) {
+  const gt = useGT();
+  const status = cell?.status ?? "not_applicable";
+  const sourcePath = resolveSkillSourcePath(entry);
+  const canRemove =
+    (status === "declared_disk" || status === "declared_runtime") && cell?.removable === true;
+  const nativeUniversalCell =
+    (status === "declared_disk" || status === "declared_runtime") && cell?.removable !== true;
+
+  return (
+    <Popover>
       <Tooltip>
         <TooltipTrigger
-          render={<span className="inline-flex size-4 items-center justify-center" />}
+          render={
+            <PopoverTrigger
+              aria-label={gt("管理 {skill} 在 {instance} 的状态", {
+                skill: entry.name,
+                instance: instance.displayName,
+              })}
+              render={<Button size="icon-micro" variant="ghost" />}
+            />
+          }
         >
-          <span className="text-xs leading-none text-muted-foreground/55">{MISSING_MARK}</span>
+          <CellStatusGlyph cell={cell} />
         </TooltipTrigger>
         <TooltipPopup side="top">
           <div className="space-y-0.5">
-            <div className="font-medium">{gt("未挂载 / 声明不到")}</div>
+            <div className={cn("font-medium", statusToneClass(status))}>
+              <SkillStatusLabel status={status} />
+            </div>
             {cell?.reason ? <div className="text-muted-foreground">{cell.reason}</div> : null}
+            <div className="text-muted-foreground">{gt("点击管理此格")}</div>
           </div>
         </TooltipPopup>
       </Tooltip>
-    );
-  }
+      <PopoverPopup align="center" padding="compact" side="bottom" width="sm">
+        <div className="space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <span className="text-xs font-semibold text-foreground">{instance.displayName}</span>
+            <span className={cn("text-2xs font-medium", statusToneClass(status))}>
+              <SkillStatusLabel status={status} />
+            </span>
+          </div>
+          <div className="text-3xs text-muted-foreground">
+            {instance.driverGroupLabel} · {instance.enabled ? gt("已启用") : gt("已停用")}
+          </div>
+          {cell?.path ? <CellPathLine label={gt("技能路径")} value={cell.path} /> : null}
+          {cell?.sourceDir ? <CellPathLine label={gt("扫描目录")} value={cell.sourceDir} /> : null}
+          {cell?.linkTarget ? (
+            <CellPathLine label={gt("联接目标")} value={cell.linkTarget} />
+          ) : null}
+          {cell?.reason ? (
+            <p className="text-pretty text-2xs leading-relaxed text-muted-foreground">
+              {cell.reason}
+            </p>
+          ) : null}
 
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex size-4 items-center justify-center" />}>
-        <span className="text-3xs leading-none text-muted-foreground/30">·</span>
-      </TooltipTrigger>
-      <TooltipPopup side="top">
-        <div className="space-y-0.5">
-          <div>{gt("不适用")}</div>
-          {cell?.reason ? <div className="text-muted-foreground">{cell.reason}</div> : null}
+          {status === "missing" ? (
+            sourcePath === undefined ? (
+              <p className="text-2xs text-warning">
+                {gt("没有可用的技能源路径，无法挂载到此实例。")}
+              </p>
+            ) : instance.driver === "antigravity" ? (
+              <PopoverClose
+                render={<Button size="xs" variant="outline" disabled={actions.busy} />}
+                onClick={() => actions.onMount(entry, instance, "link")}
+              >
+                <Link2Icon />
+                {gt("注册到 skills.json")}
+              </PopoverClose>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                <PopoverClose
+                  render={<Button size="xs" variant="outline" disabled={actions.busy} />}
+                  onClick={() => actions.onMount(entry, instance, "link")}
+                >
+                  <Link2Icon />
+                  {gt("挂载到此实例（联接）")}
+                </PopoverClose>
+                <PopoverClose
+                  render={<Button size="xs" variant="ghost" disabled={actions.busy} />}
+                  onClick={() => actions.onMount(entry, instance, "copy")}
+                >
+                  <CopyIcon />
+                  {gt("复制到此实例")}
+                </PopoverClose>
+              </div>
+            )
+          ) : null}
+
+          {status === "disk_warning" ? (
+            cell?.autoFixable === true ? (
+              <PopoverClose
+                render={<Button size="xs" variant="outline" disabled={actions.busy} />}
+                onClick={() => actions.onFix(entry, instance)}
+              >
+                <WrenchIcon />
+                {gt("一键修复此异常")}
+              </PopoverClose>
+            ) : (
+              <p className="text-3xs leading-relaxed text-muted-foreground">
+                {gt("该异常需要手动修正 SKILL.md 的 frontmatter 后刷新。")}
+              </p>
+            )
+          ) : null}
+
+          {canRemove ? (
+            <div className="space-y-1">
+              <PopoverClose
+                render={<Button size="xs" variant="destructive-outline" disabled={actions.busy} />}
+                onClick={() => actions.onUnmount(entry, instance)}
+              >
+                <Trash2Icon />
+                {gt("从此实例移除")}
+              </PopoverClose>
+              <p className="text-3xs leading-relaxed text-muted-foreground">
+                {gt("联接只会删除联接；实体目录会移入同级 _backup 备份。")}
+              </p>
+              {sharedDirSiblings.length > 0 ? (
+                <p className="text-3xs leading-relaxed text-warning">
+                  {gt("注意：该目录与 {names} 共享，移除将同步影响这些实例。", {
+                    names: sharedDirSiblings.join("、"),
+                  })}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {nativeUniversalCell ? (
+            <p className="text-3xs leading-relaxed text-muted-foreground">
+              {gt("来自真全局池原生扫描，请在展开行执行降级或移入备份。")}
+            </p>
+          ) : null}
+
+          {status === "not_applicable" ? (
+            <p className="text-2xs text-muted-foreground">
+              {cell?.reason ?? gt("该实例不适用此技能。")}
+            </p>
+          ) : null}
         </div>
-      </TooltipPopup>
-    </Tooltip>
+      </PopoverPopup>
+    </Popover>
   );
 }
 
 function SkillDetailRow({
   entry,
   instances,
+  actions,
 }: {
   readonly entry: SkillMatrixEntry;
   readonly instances: ReadonlyArray<SkillMatrixInstance>;
+  readonly actions: SkillMatrixActions;
 }) {
   const gt = useGT();
-  const rows = instances.flatMap((instance) => {
-    const cell = entry.cells[instance.instanceId];
-    return cell === undefined || cell.status === "not_applicable" ? [] : [{ instance, cell }];
-  });
+  const sourcePath = resolveSkillSourcePath(entry);
+  const demoteTargets = instances.filter(
+    (instance) =>
+      instance.writableGlobalSkillDir !== undefined &&
+      normalizePathForCompare(instance.writableGlobalSkillDir) !==
+        normalizePathForCompare(actions.universalPoolDir),
+  );
 
   return (
-    <div className="space-y-2 border-t bg-muted/20 px-3 py-2.5 text-xs">
+    <div className="space-y-2.5 border-t bg-muted/20 px-3 py-2.5 text-xs">
       {entry.description ? (
         <p className="text-pretty leading-relaxed text-muted-foreground">{entry.description}</p>
       ) : null}
-      {entry.canonicalPath ? (
-        <div className="flex flex-wrap items-baseline gap-1.5 text-2xs">
-          <span className="shrink-0 font-medium text-foreground/75">{gt("源路径：")}</span>
-          <span className="break-all font-mono text-muted-foreground">{entry.canonicalPath}</span>
+
+      <div className="space-y-1">
+        <div className="text-2xs font-medium text-foreground/80">
+          {gt("磁盘位置 ({count})", { count: entry.locations.length })}
         </div>
-      ) : null}
-      {rows.length > 0 ? (
-        <div className="divide-y divide-border/50 rounded-md border bg-background/70">
-          {rows.map(({ instance, cell }) => (
-            <div
-              key={instance.instanceId}
-              className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 px-2.5 py-1.5 text-2xs"
+        {entry.locations.length === 0 ? (
+          <p className="text-2xs text-muted-foreground">{gt("没有可用的磁盘位置记录。")}</p>
+        ) : (
+          <div className="divide-y divide-border/50 rounded-md border bg-background/70">
+            {entry.locations.map((location) => (
+              <div key={`${location.path}:${location.layer}`} className="space-y-1 px-2.5 py-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="outline" size="sm">
+                    <SkillLayerLabel layer={location.layer} />
+                  </Badge>
+                  <span className="text-2xs font-medium text-foreground">
+                    {location.ownerLabel}
+                  </span>
+                  <span className="text-2xs text-muted-foreground">
+                    {location.isLink ? gt("联接") : gt("实体")}
+                  </span>
+                </div>
+                <div className="break-all font-mono text-3xs text-muted-foreground">
+                  {location.path}
+                </div>
+                {location.linkTarget ? (
+                  <div className="break-all font-mono text-3xs text-muted-foreground">
+                    → {location.linkTarget}
+                  </div>
+                ) : null}
+                {location.contentHash ? (
+                  <div className="break-all font-mono text-3xs text-muted-foreground/80">
+                    {gt("内容哈希：{hash}", { hash: location.contentHash })}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {entry.scope === "builtin" ? (
+        <p className="text-2xs text-muted-foreground">
+          {gt("该技能为驱动内置技能，不支持同步或移入回收备份。")}
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {entry.hasDuplicateCopies ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={actions.busy}
+              onClick={() => actions.onDedupe(entry)}
             >
-              <span className="min-w-28 shrink-0 font-medium text-foreground">
-                {instance.driverGroupLabel} · {instance.displayName}
-              </span>
-              <span className={cn("shrink-0 font-medium", statusToneClass(cell.status))}>
-                <SkillStatusLabel status={cell.status} />
-              </span>
-              {cell.path ? (
-                <span className="min-w-0 break-all font-mono text-muted-foreground">
-                  {cell.path}
-                  {cell.linkTarget ? ` → ${cell.linkTarget}` : ""}
-                </span>
-              ) : null}
-              {cell.reason ? (
-                <span className="min-w-0 text-muted-foreground">{cell.reason}</span>
-              ) : null}
-            </div>
-          ))}
+              <CopyIcon />
+              {gt("只保留真全局一份（去重）")}
+            </Button>
+          ) : null}
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={actions.busy}
+            onClick={() => actions.onSyncSkill(entry)}
+          >
+            <RefreshCwIcon />
+            {gt("同步到其他实例…")}
+          </Button>
+          {entry.scope === "agent_global" ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={actions.busy || sourcePath === undefined}
+              onClick={() => actions.onPromote(entry)}
+            >
+              <ArrowUpRightIcon />
+              {gt("提升为真全局")}
+            </Button>
+          ) : null}
+          {entry.scope === "universal" ? (
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={actions.busy || demoteTargets.length === 0}
+                  />
+                }
+              >
+                <LayersIcon />
+                {gt("降级为供应商专属…")}
+              </MenuTrigger>
+              <MenuPopup align="start" className="w-72">
+                <MenuGroupLabel>{gt("选择目标实例")}</MenuGroupLabel>
+                {demoteTargets.map((instance) => (
+                  <MenuItem
+                    key={instance.instanceId}
+                    disabled={actions.busy}
+                    onClick={() => actions.onDemote(entry, instance)}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{instance.displayName}</span>
+                    <span className="shrink-0 text-3xs text-muted-foreground">
+                      {instance.driverGroupLabel}
+                    </span>
+                  </MenuItem>
+                ))}
+              </MenuPopup>
+            </Menu>
+          ) : null}
+          <Button
+            size="xs"
+            variant="destructive-outline"
+            disabled={actions.busy}
+            onClick={() => actions.onBackup(entry)}
+          >
+            <ArchiveIcon />
+            {gt("移入回收备份 (_backup)")}
+          </Button>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -389,23 +640,45 @@ function DiagnosticBanner({ diagnostic }: { readonly diagnostic: SkillMatrixDiag
 function SkillsMatrixTable({
   skills,
   instances,
+  allInstances,
   checkedAt,
   showOwnerBadges,
   expandedSkills,
   onToggleSkill,
+  actions,
 }: {
   readonly skills: ReadonlyArray<SkillMatrixEntry>;
   readonly instances: ReadonlyArray<SkillMatrixInstance>;
+  readonly allInstances: ReadonlyArray<SkillMatrixInstance>;
   readonly checkedAt: string;
   readonly showOwnerBadges: boolean;
   readonly expandedSkills: Readonly<Record<string, boolean>>;
   readonly onToggleSkill: (name: string) => void;
+  readonly actions: SkillMatrixActions;
 }) {
   const gt = useGT();
   const timestampFormat = useClientSettings().timestampFormat;
   const checkedLabel = formatDateTimeTimestamp(checkedAt, timestampFormat);
   const groups = groupInstancesByDriver(instances);
   const totalColumns = instances.length + 2;
+  const sharedDirSiblingsById = new Map<string, ReadonlyArray<string>>();
+  for (const instance of instances) {
+    if (instance.driver === "antigravity" || instance.writableGlobalSkillDir === undefined) {
+      sharedDirSiblingsById.set(instance.instanceId, []);
+      continue;
+    }
+    const dirKey = normalizePathForCompare(instance.writableGlobalSkillDir);
+    const siblings = allInstances
+      .filter(
+        (other) =>
+          other.instanceId !== instance.instanceId &&
+          other.driver !== "antigravity" &&
+          other.writableGlobalSkillDir !== undefined &&
+          normalizePathForCompare(other.writableGlobalSkillDir) === dirKey,
+      )
+      .map((other) => other.displayName);
+    sharedDirSiblingsById.set(instance.instanceId, siblings);
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border">
@@ -435,11 +708,11 @@ function SkillsMatrixTable({
                   <th
                     key={instance.instanceId}
                     className={cn(
-                      "min-w-[56px] px-1.5 py-1 text-center font-normal",
+                      "min-w-[88px] px-1 py-1 text-center font-normal",
                       idx === 0 && "border-l border-border/60",
                     )}
                   >
-                    <InstanceColumnHeader instance={instance} />
+                    <InstanceColumnHeader instance={instance} actions={actions} />
                   </th>
                 )),
               )}
@@ -451,22 +724,15 @@ function SkillsMatrixTable({
               return (
                 <Fragment key={entry.name}>
                   <tr
-                    tabIndex={0}
-                    aria-expanded={expanded}
-                    onClick={() => onToggleSkill(entry.name)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        onToggleSkill(entry.name);
-                      }
-                    }}
-                    className={cn(
-                      "cursor-pointer transition-colors hover:bg-muted/35 focus-visible:bg-muted/35 focus-visible:outline-none",
-                      expanded && "bg-muted/25",
-                    )}
+                    className={cn("transition-colors hover:bg-muted/35", expanded && "bg-muted/25")}
                   >
                     <td className="px-3 py-2 align-middle">
-                      <span className="flex min-w-0 items-center gap-1.5">
+                      <button
+                        type="button"
+                        aria-expanded={expanded}
+                        onClick={() => onToggleSkill(entry.name)}
+                        className="flex w-full min-w-0 flex-wrap items-center gap-1.5 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      >
                         {expanded ? (
                           <ChevronDownIcon
                             className="size-3 shrink-0 text-muted-foreground"
@@ -481,6 +747,18 @@ function SkillsMatrixTable({
                         <span className="min-w-0 truncate font-mono font-medium text-foreground">
                           {entry.name}
                         </span>
+                        {entry.hasDuplicateCopies ? (
+                          <Badge variant="warning" size="sm">
+                            <CopyIcon />
+                            {gt("重复 ×{count}", { count: entry.locations.length })}
+                          </Badge>
+                        ) : null}
+                        {entry.hasContentConflict ? (
+                          <Badge variant="error" size="sm">
+                            <TriangleAlertIcon />
+                            {gt("内容冲突")}
+                          </Badge>
+                        ) : null}
                         {showOwnerBadges
                           ? entry.ownerGroupLabels.map((label) => (
                               <Badge key={label} variant="outline" size="sm">
@@ -488,7 +766,7 @@ function SkillsMatrixTable({
                               </Badge>
                             ))
                           : null}
-                      </span>
+                      </button>
                     </td>
                     <td
                       className={cn(
@@ -503,11 +781,17 @@ function SkillsMatrixTable({
                         <td
                           key={instance.instanceId}
                           className={cn(
-                            "px-1.5 py-2 text-center align-middle",
+                            "px-1 py-2 text-center align-middle",
                             idx === 0 && "border-l border-border/40",
                           )}
                         >
-                          <CellStatusMarker cell={entry.cells[instance.instanceId]} />
+                          <SkillCellPopover
+                            entry={entry}
+                            instance={instance}
+                            cell={entry.cells[instance.instanceId]}
+                            sharedDirSiblings={sharedDirSiblingsById.get(instance.instanceId) ?? []}
+                            actions={actions}
+                          />
                         </td>
                       )),
                     )}
@@ -515,7 +799,7 @@ function SkillsMatrixTable({
                   {expanded ? (
                     <tr>
                       <td colSpan={totalColumns} className="p-0">
-                        <SkillDetailRow entry={entry} instances={instances} />
+                        <SkillDetailRow entry={entry} instances={instances} actions={actions} />
                       </td>
                     </tr>
                   ) : null}
@@ -557,6 +841,9 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
   const getSkillsOverview = useAtomCommand(serverEnvironment.getSkillsOverview, {
     reportFailure: false,
   });
+  const manageSkills = useAtomCommand(serverEnvironment.manageSkills, {
+    reportFailure: false,
+  });
 
   const [overview, setOverview] = useState<ServerGetSkillsOverviewResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -564,14 +851,19 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
   const [activeScopeTab, setActiveScopeTab] = useState<SkillMatrixScope>("universal");
   const [search, setSearch] = useState("");
   const [issuesOnly, setIssuesOnly] = useState(false);
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
   const [includeDisabled, setIncludeDisabled] = useState(false);
   const [expandedSkills, setExpandedSkills] = useState<Readonly<Record<string, boolean>>>({});
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [syncRequest, setSyncRequest] = useState<SyncDialogRequest | null>(null);
+  const [dedupeConflictEntry, setDedupeConflictEntry] = useState<SkillMatrixEntry | null>(null);
+  const [backupEntry, setBackupEntry] = useState<SkillMatrixEntry | null>(null);
   const loadGeneration = useRef(0);
+  const manageInFlight = useRef(false);
 
-  const errorText = useStableCallback((error: unknown) =>
-    error instanceof Error
-      ? (thrownErrorMessage(error, resolveNow) ?? error.message)
-      : gt("无法读取技能声明状态。"),
+  const errorText = useStableCallback(
+    (error: unknown, fallback: string) => errorDisplayMessage(error, resolveNow) ?? fallback,
   );
 
   const loadOverview = useStableCallback(() => {
@@ -586,7 +878,7 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
         return;
       }
       if (isAtomCommandInterrupted(result)) return;
-      setErrorMessage(errorText(squashAtomCommandFailure(result)));
+      setErrorMessage(errorText(squashAtomCommandFailure(result), gt("无法读取技能声明状态。")));
     });
   });
 
@@ -599,8 +891,63 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- reload only when environmentId changes; loadOverview is a stable callback
   }, [environmentId, loadOverview]);
 
+  const runManage = useStableCallback(
+    async (
+      key: string,
+      input: ServerManageSkillsInput,
+    ): Promise<ServerManageSkillsResult | null> => {
+      if (manageInFlight.current) return null;
+      manageInFlight.current = true;
+      const generation = ++loadGeneration.current;
+      setIsLoading(false);
+      setBusyKey(key);
+      const result = await manageSkills({ environmentId, input });
+      manageInFlight.current = false;
+      if (loadGeneration.current !== generation) {
+        setBusyKey(null);
+        return null;
+      }
+      setBusyKey(null);
+      if (result._tag === "Success") {
+        const value = result.value;
+        setOverview(value.overview);
+        if (value.skippedConflicts.length > 0) {
+          toastManager.add({
+            type: "warning",
+            title: value.summary,
+            description: gt(
+              "以下技能存在内容冲突，已跳过：{names}。请在「仅看重复」中展开技能并手动选择保留版本。",
+              { names: value.skippedConflicts.join("、") },
+            ),
+          });
+        } else {
+          toastManager.add({ type: "success", title: value.summary });
+        }
+        return value;
+      }
+      if (isAtomCommandInterrupted(result)) return null;
+      toastManager.add({
+        type: "error",
+        title: gt("技能操作失败"),
+        description: errorText(
+          squashAtomCommandFailure(result),
+          gt("技能操作失败，请查看服务端日志。"),
+        ),
+      });
+      if (
+        input.action === "sync_instances" ||
+        input.action === "dedupe_all" ||
+        input.action === "dedupe_skill" ||
+        input.action === "import_skill"
+      ) {
+        loadOverview();
+      }
+      return null;
+    },
+  );
+
   const allSkills = overview?.skills ?? [];
-  const instances = (overview?.instances ?? []).filter(
+  const displayedInstances = (overview?.instances ?? []).filter(
     (instance) => includeDisabled || instance.enabled,
   );
   const universalSkills = allSkills.filter((skill) => skill.scope === "universal");
@@ -612,26 +959,38 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
       ? "agent_global"
       : activeScopeTab;
 
-  const scopedSkills =
-    effectiveTab === "universal"
-      ? universalSkills
-      : effectiveTab === "agent_global"
-        ? agentGlobalSkills
-        : builtinSkills;
+  const duplicateStats = countDuplicateSkills(allSkills);
+  const hiddenAgentSkillCount = countHiddenDisabledAgentSkills(
+    allSkills,
+    displayedInstances,
+    includeDisabled,
+  );
 
-  const issueCountInTab = scopedSkills.filter((skill) =>
-    hasIssueInDisplayedInstances(skill, instances),
-  ).length;
+  const issueCountInTab = filterSkillEntries(allSkills, {
+    scope: effectiveTab,
+    query: "",
+    onlyIssues: true,
+    onlyDuplicates: false,
+    displayedInstances,
+    showDisabled: includeDisabled,
+  }).length;
 
-  const normalizedSearch = search.trim().toLowerCase();
-  const visibleSkills = scopedSkills.filter((skill) => {
-    if (issuesOnly && !hasIssueInDisplayedInstances(skill, instances)) return false;
-    if (normalizedSearch.length === 0) return true;
-    return (
-      skill.name.toLowerCase().includes(normalizedSearch) ||
-      (skill.description?.toLowerCase().includes(normalizedSearch) ?? false) ||
-      skill.ownerGroupLabels.some((label) => label.toLowerCase().includes(normalizedSearch))
-    );
+  const duplicateCountInTab = filterSkillEntries(allSkills, {
+    scope: effectiveTab,
+    query: "",
+    onlyIssues: false,
+    onlyDuplicates: true,
+    displayedInstances,
+    showDisabled: includeDisabled,
+  }).length;
+
+  const visibleSkills = filterSkillEntries(allSkills, {
+    scope: effectiveTab,
+    query: search,
+    onlyIssues: issuesOnly,
+    onlyDuplicates: duplicatesOnly,
+    displayedInstances,
+    showDisabled: includeDisabled,
   });
 
   const diagnostics = overview?.diagnostics ?? [];
@@ -640,13 +999,135 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
     setExpandedSkills((current) => ({ ...current, [name]: !(current[name] ?? false) }));
   };
 
+  const runCellAction = (key: string, input: ServerManageSkillsInput): void => {
+    void runManage(key, input);
+  };
+
+  const openSyncSkill = (entry: SkillMatrixEntry) => {
+    const missingIds = displayedInstances
+      .filter((instance) => entry.cells[instance.instanceId]?.status === "missing")
+      .map((instance) => instance.instanceId);
+    setSyncRequest({
+      skillName: entry.name,
+      entry,
+      missingInstanceIds: missingIds,
+      initialTargetIds: missingIds,
+    });
+  };
+
+  const openSyncFromInstance = (instance: SkillMatrixInstance) => {
+    const sourceSkills = allSkills.filter((skill) => {
+      if (skill.scope === "builtin") return false;
+      const status = skill.cells[instance.instanceId]?.status;
+      return status === "declared_disk" || status === "declared_runtime";
+    });
+    const missingIds = displayedInstances
+      .filter(
+        (target) =>
+          target.instanceId !== instance.instanceId &&
+          sourceSkills.some((skill) => skill.cells[target.instanceId]?.status === "missing"),
+      )
+      .map((target) => target.instanceId);
+    setSyncRequest({
+      sourceInstanceId: instance.instanceId,
+      missingInstanceIds: missingIds,
+      initialTargetIds: getDefaultSyncTargetIds(displayedInstances, instance.instanceId, true),
+    });
+  };
+
+  const actions: SkillMatrixActions = {
+    busy: busyKey !== null,
+    universalPoolDir: overview?.universalPoolDir ?? "~/.agents/skills",
+    onLinkUniversalPool: (instance) => {
+      runCellAction(`link_universal_pool:${instance.instanceId}`, {
+        action: "link_universal_pool",
+        targetInstanceId: instance.instanceId,
+      });
+    },
+    onSyncFromInstance: openSyncFromInstance,
+    onMount: (entry, instance, mode) => {
+      const sourcePath = resolveSkillSourcePath(entry);
+      runCellAction(`mount:${entry.name}:${instance.instanceId}`, {
+        action: "mount_to_instance",
+        skillName: entry.name,
+        targetInstanceId: instance.instanceId,
+        mode,
+        ...(sourcePath === undefined ? {} : { sourcePath }),
+      });
+    },
+    onFix: (entry, instance) => {
+      runCellAction(`fix:${entry.name}:${instance.instanceId}`, {
+        action: "fix_instance_warning",
+        skillName: entry.name,
+        targetInstanceId: instance.instanceId,
+      });
+    },
+    onUnmount: (entry, instance) => {
+      runCellAction(`unmount:${entry.name}:${instance.instanceId}`, {
+        action: "unmount_from_instance",
+        skillName: entry.name,
+        targetInstanceId: instance.instanceId,
+      });
+    },
+    onDedupe: (entry) => {
+      if (entry.hasContentConflict) {
+        setDedupeConflictEntry(entry);
+        return;
+      }
+      runCellAction(`dedupe_skill:${entry.name}`, {
+        action: "dedupe_skill",
+        skillName: entry.name,
+      });
+    },
+    onSyncSkill: openSyncSkill,
+    onPromote: (entry) => {
+      const sourcePath = resolveSkillSourcePath(entry);
+      if (sourcePath === undefined) return;
+      runCellAction(`promote:${entry.name}`, {
+        action: "promote_to_universal",
+        skillName: entry.name,
+        sourcePath,
+      });
+    },
+    onDemote: (entry, instance) => {
+      runCellAction(`demote:${entry.name}:${instance.instanceId}`, {
+        action: "demote_to_provider",
+        skillName: entry.name,
+        targetInstanceId: instance.instanceId,
+      });
+    },
+    onBackup: (entry) => {
+      setBackupEntry(entry);
+    },
+  };
+
+  const dedupeAll = async () => {
+    const result = await runManage("dedupe_all", { action: "dedupe_all" });
+    if (result === null || result.skippedConflicts.length === 0) return;
+    setDuplicatesOnly(true);
+    const firstSkipped = result.skippedConflicts[0];
+    if (firstSkipped === undefined) return;
+    setExpandedSkills((current) => ({ ...current, [firstSkipped]: true }));
+    const skippedEntry = result.overview.skills.find((skill) => skill.name === firstSkipped);
+    if (skippedEntry !== undefined) setActiveScopeTab(skippedEntry.scope);
+  };
+
+  const confirmBackup = async () => {
+    if (backupEntry === null) return;
+    const result = await runManage(`backup_skill:${backupEntry.name}`, {
+      action: "backup_skill",
+      skillName: backupEntry.name,
+    });
+    if (result !== null) setBackupEntry(null);
+  };
+
   const tabHint =
     effectiveTab === "universal"
       ? gt("来源：{dir}（跨 Agent 通用池，预期所有已启用实例都应声明到）", {
           dir: overview?.universalPoolDir ?? "~/.agents/skills",
         })
       : effectiveTab === "agent_global"
-        ? gt("仅位于某类 Agent 专属全局目录的技能，只校验同驱动各实例覆盖，其他驱动标记为不适用。")
+        ? gt("只校验同供应商各实例的覆盖，其他供应商标记为不适用。展开行可提升为真全局。")
         : gt("各驱动自带的内置技能，仅在该驱动下声明。");
 
   const renderBody = () => {
@@ -672,7 +1153,7 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
       );
     }
 
-    if (instances.length === 0) {
+    if (displayedInstances.length === 0) {
       return (
         <p className="py-4 text-xs text-muted-foreground">
           {gt("没有已启用的智能体实例，打开「含已停用实例」查看全部。")}
@@ -681,11 +1162,10 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
     }
 
     if (visibleSkills.length === 0) {
+      const hasAnyInScope = allSkills.some((skill) => skill.scope === effectiveTab);
       return (
         <p className="py-4 text-xs text-muted-foreground">
-          {scopedSkills.length === 0
-            ? gt("当前分层下暂无技能。")
-            : gt("当前筛选条件下没有匹配的技能。")}
+          {hasAnyInScope ? gt("当前筛选条件下没有匹配的技能。") : gt("当前分层下暂无技能。")}
         </p>
       );
     }
@@ -693,11 +1173,13 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
     return (
       <SkillsMatrixTable
         skills={visibleSkills}
-        instances={instances}
+        instances={displayedInstances}
+        allInstances={overview.instances}
         checkedAt={overview.checkedAt}
         showOwnerBadges={effectiveTab === "agent_global"}
         expandedSkills={expandedSkills}
         onToggleSkill={toggleSkill}
+        actions={actions}
       />
     );
   };
@@ -705,24 +1187,46 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
   return (
     <SettingsSection
       id="skills-overview"
-      title={gt("全局技能覆盖")}
+      title={gt("技能管理器")}
       headerAction={
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={isLoading}
-          aria-busy={isLoading}
-          onClick={() => loadOverview()}
-        >
-          <RefreshIcon refreshing={isLoading} />
-          {gt("刷新")}
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
+          <Button
+            size="xs"
+            disabled={overview === null || busyKey !== null}
+            onClick={() => setImportOpen(true)}
+          >
+            <PlusIcon />
+            {gt("导入技能")}
+          </Button>
+          {duplicateStats.total > 0 ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={busyKey !== null}
+              aria-busy={busyKey === "dedupe_all"}
+              onClick={() => void dedupeAll()}
+            >
+              <CopyIcon />
+              {gt("一键去重 ({count})", { count: duplicateStats.total })}
+            </Button>
+          ) : null}
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={isLoading || busyKey !== null}
+            aria-busy={isLoading}
+            onClick={() => loadOverview()}
+          >
+            <RefreshIcon refreshing={isLoading} />
+            {gt("刷新")}
+          </Button>
+        </div>
       }
     >
       <div className="space-y-2.5 px-3 py-2.5 sm:px-4">
         <p className="text-pretty text-xs leading-normal text-muted-foreground">
           {gt(
-            "按「真全局池 / Agent 专属全局 / 驱动内置」分层展示每个技能在各 Agent 实例中的真实声明状态（不统计单项目技能）。",
+            "按「真全局池 / 供应商专属全局 / 驱动内置」分层展示每个技能在各 Agent 实例中的真实声明状态，并可直接导入、同步、去重和备份（不统计单项目技能）。",
           )}
         </p>
 
@@ -740,7 +1244,7 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
               {gt("真全局 ({count})", { count: universalSkills.length })}
             </Toggle>
             <Toggle value="agent_global">
-              {gt("Agent 专属 ({count})", { count: agentGlobalSkills.length })}
+              {gt("供应商专属 ({count})", { count: agentGlobalSkills.length })}
             </Toggle>
             <Toggle value="builtin">
               {gt("驱动内置 ({count})", { count: builtinSkills.length })}
@@ -769,12 +1273,35 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
           <Toggle
             variant="outline"
             size="xs"
+            pressed={duplicatesOnly}
+            onPressedChange={(pressed) => setDuplicatesOnly(Boolean(pressed))}
+          >
+            {gt("仅看重复 ({count})", { count: duplicateCountInTab })}
+          </Toggle>
+
+          <Toggle
+            variant="outline"
+            size="xs"
             pressed={includeDisabled}
             onPressedChange={(pressed) => setIncludeDisabled(Boolean(pressed))}
           >
             {gt("含已停用实例")}
           </Toggle>
         </div>
+
+        {effectiveTab === "agent_global" && !includeDisabled && hiddenAgentSkillCount > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-info/30 bg-info/5 px-2.5 py-1.5 text-2xs text-info-foreground">
+            <InfoIcon className="size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">
+              {gt("另有 {count} 个专属技能仅归属于已停用实例，点击展开「含已停用实例」查看。", {
+                count: hiddenAgentSkillCount,
+              })}
+            </span>
+            <Button size="micro" variant="outline" onClick={() => setIncludeDisabled(true)}>
+              {gt("含已停用实例")}
+            </Button>
+          </div>
+        ) : null}
 
         <p className="font-mono text-3xs text-muted-foreground">{tabHint}</p>
       </div>
@@ -800,6 +1327,81 @@ export function SkillsMatrixSection({ environmentId }: SkillsMatrixSectionProps)
       ) : null}
 
       <div className="px-3 pb-3 sm:px-4">{renderBody()}</div>
+
+      <ImportSkillDialog
+        key={environmentId}
+        open={importOpen}
+        environmentId={environmentId}
+        instances={overview?.instances ?? []}
+        busy={busyKey !== null}
+        onOpenChange={setImportOpen}
+        onSubmit={async (input) => (await runManage("import_skill", input)) !== null}
+      />
+
+      {syncRequest !== null ? (
+        <SyncSkillsDialog
+          open
+          instances={displayedInstances}
+          sourceInstanceId={syncRequest.sourceInstanceId}
+          skillName={syncRequest.skillName}
+          entry={syncRequest.entry}
+          initialTargetIds={syncRequest.initialTargetIds}
+          missingInstanceIds={syncRequest.missingInstanceIds}
+          busy={busyKey !== null}
+          onOpenChange={(open) => {
+            if (!open) setSyncRequest(null);
+          }}
+          onSubmit={async (input) => (await runManage("sync_instances", input)) !== null}
+        />
+      ) : null}
+
+      {dedupeConflictEntry !== null ? (
+        <DedupeConflictDialog
+          open
+          entry={dedupeConflictEntry}
+          busy={busyKey !== null}
+          onOpenChange={(open) => {
+            if (!open) setDedupeConflictEntry(null);
+          }}
+          onSubmit={async (input) => (await runManage("dedupe_skill", input)) !== null}
+        />
+      ) : null}
+
+      <AlertDialog
+        open={backupEntry !== null}
+        onOpenChange={(open) => {
+          if (!open) setBackupEntry(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{gt("移入回收备份 (_backup)")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {gt(
+                "将技能 {name} 的实体目录移入同级 _backup 目录，操作完成后可以从磁盘找回。联接只会被移除，不会删除真实目标。",
+                { name: backupEntry?.name ?? "" },
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={busyKey !== null}
+              render={<Button variant="outline" disabled={busyKey !== null} />}
+            >
+              {gt("取消")}
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={busyKey !== null}
+              aria-busy={busyKey?.startsWith("backup_skill:") === true}
+              onClick={() => void confirmBackup()}
+            >
+              <ArchiveIcon />
+              {gt("确认移入备份")}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </SettingsSection>
   );
 }

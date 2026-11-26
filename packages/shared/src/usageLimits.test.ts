@@ -2149,6 +2149,60 @@ describe("grouped ACP Registry limits (Factory Droid)", () => {
     expect(report?.accounts.map((account) => account.id)).toEqual([droid.instanceId]);
   });
 
+  it("does not repeat a Factory usage link for an account that reports native windows", () => {
+    const presentations = new Map([
+      [
+        EnvironmentId.make("local"),
+        {
+          entry: { target: { label: "Host" } },
+          serverConfig: { providers: [droid] },
+        },
+      ],
+    ]);
+    expect(droid.usageLimits?.windows.length).toBeGreaterThan(0);
+    expect(collectExternalUsageLinks(presentations)).toEqual([]);
+  });
+
+  it("keeps OpenCode Console external workspace links even when native windows are present", () => {
+    const opencodeWithWindows = provider({
+      instanceId: ProviderInstanceId.make("opencode"),
+      driver: ProviderDriverKind.make("opencode"),
+      displayName: "OpenCode",
+      usageLimits: {
+        checkedAt,
+        windows: [
+          {
+            id: "go_rolling",
+            kind: "session",
+            label: "Go · Session",
+            usedPercent: 18,
+          },
+        ],
+        externalUsage: {
+          label: "My Workspace",
+          url: "https://opencode.ai/console/wrk_123",
+        },
+      },
+    });
+    const presentations = new Map([
+      [
+        EnvironmentId.make("local"),
+        {
+          entry: { target: { label: "Host" } },
+          serverConfig: { providers: [opencodeWithWindows] },
+        },
+      ],
+    ]);
+    expect(collectExternalUsageLinks(presentations)).toEqual([
+      {
+        label: "My Workspace",
+        url: "https://opencode.ai/console/wrk_123",
+        message: undefined,
+        accounts: ["OpenCode on Host"],
+      },
+    ]);
+  });
+
   it("collects external usage links when auth status is unknown, not unauthenticated", () => {
     const unknownAuthDroid = provider({
       ...droid,

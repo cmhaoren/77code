@@ -210,8 +210,13 @@ export function collectExternalUsageLinks(
   >();
   for (const presentation of presentations.values()) {
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
-      const external = provider.usageLimits?.externalUsage;
-      if (external && provider.auth.status !== "unauthenticated") {
+      const limits = provider.usageLimits;
+      const external = limits?.externalUsage;
+      // Factory Droid already renders native quota windows when authenticated, so repeating a billing
+      // link card duplicates it. OpenCode Console deliberately keeps its workspace link alongside windows.
+      const hasRedundantNativeWindows =
+        (limits?.windows.length ?? 0) > 0 && provider.driver !== "opencode";
+      if (external && !hasRedundantNativeWindows && provider.auth.status !== "unauthenticated") {
         const account = accountLabel(
           provider.displayName ?? provider.instanceId,
           presentation.entry.target.label,

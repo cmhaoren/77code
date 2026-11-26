@@ -1806,6 +1806,10 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => `${environmentId}:${input.cwd ?? ""}`,
       },
     }),
+    manageSkills: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:manage-skills",
+      tag: WS_METHODS.serverManageSkills,
+    }),
     uninstallAcpRegistryManagedBinary: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:acp-registry:uninstall-managed-binary",
       tag: WS_METHODS.serverUninstallAcpRegistryManagedBinary,

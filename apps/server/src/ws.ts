@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import { buildSkillsOverview } from "./provider/skillsOverview.ts";
+import { manageSkills } from "./provider/skillsManage.ts";
 import {
   AcpRegistryOperationError,
   SkillsOverviewError,
@@ -2528,6 +2529,19 @@ export const layerWsRpc = (
             });
           },
         ),
+        [WS_METHODS.serverManageSkills]: Effect.fn("WsServer.manageSkills")(function* (input) {
+          const [providers, settings] = yield* Effect.all([
+            providerRegistry.getProviders,
+            serverSettings.getSettings.pipe(
+              Effect.mapError((error) => new SkillsOverviewError({ message: error.message })),
+            ),
+          ]);
+          return yield* manageSkills(input, {
+            providers,
+            settings,
+            stateDir: config.stateDir,
+          });
+        }),
         [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: (input) =>
           Effect.annotateCurrentSpan({ "acp_registry.agent_id": input.agentId }).pipe(
             Effect.andThen(

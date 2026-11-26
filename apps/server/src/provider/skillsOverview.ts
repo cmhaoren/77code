@@ -10,12 +10,14 @@ import {
   IsoDateTime,
   NonNegativeInt,
   PROVIDER_DISPLAY_NAMES,
+  type ProviderDriverKind,
   type ProviderInstanceId,
   SkillsOverviewError,
   type ServerGetSkillsOverviewResult,
   type ServerProvider,
   type ServerProviderSkill,
   type ServerSettings,
+  type SkillDiskLocation,
   type SkillMatrixCell,
   type SkillMatrixDiagnostic,
   type SkillMatrixEntry,
@@ -50,6 +52,7 @@ interface DiscoveredDiskSkill {
   readonly linkTarget?: string;
   readonly fromSkillsJson?: boolean;
   readonly manifestPathNonAbsolute?: boolean;
+  readonly contentHash?: string;
 }
 
 interface ManifestEntryScan {
@@ -58,7 +61,11 @@ interface ManifestEntryScan {
   readonly nonAbsoluteOnWindows: boolean;
 }
 
-interface InstanceSkillSpec {
+export interface InstanceSkillSpec {
+  readonly instanceId: ProviderInstanceId;
+  readonly driver: ProviderDriverKind;
+  readonly displayName: string;
+  readonly enabled: boolean;
   readonly driverGroupKey: string;
   readonly driverGroupLabel: string;
   readonly dirs: ReadonlyArray<string>;
@@ -67,9 +74,24 @@ interface InstanceSkillSpec {
   readonly manifestEntries: ReadonlyArray<ManifestEntryScan>;
   readonly factoryHomeOverride?: string;
   readonly isFactoryDroid: boolean;
+  readonly profileDir?: string;
+  readonly manifestPath?: string;
 }
 
-function isIgnoredSkillDirName(entryName: string): boolean {
+type SkillDiskLayer = SkillDiskLocation["layer"];
+
+interface AggregatedSkillLocation {
+  readonly path: string;
+  readonly sourceDir: string;
+  readonly layer: SkillDiskLayer;
+  readonly ownerLabel: string;
+  readonly isLink: boolean;
+  readonly linkTarget?: string;
+  readonly contentHash?: string;
+  readonly readsUniversalPool: boolean;
+}
+
+export function isIgnoredSkillDirName(entryName: string): boolean {
   const lower = entryName.toLowerCase();
   return (
     entryName.startsWith(".") ||
@@ -80,7 +102,7 @@ function isIgnoredSkillDirName(entryName: string): boolean {
   );
 }
 
-function expandHome(rawPath: string, userHome: string): string {
+export function expandHome(rawPath: string, userHome: string): string {
   const trimmed = rawPath.trim();
   if (trimmed === "~") return userHome;
   if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
@@ -89,7 +111,11 @@ function expandHome(rawPath: string, userHome: string): string {
   return trimmed;
 }
 
-function parseSkillFrontmatter(content: string): {
+export function computeSkillContentHash(rawContent: string): string {
+  return NodeCrypto.createHash("sha256").update(rawContent.trim()).digest("hex").slice(0, 16);
+}
+
+export function parseSkillFrontmatter(content: string): {
   readonly name?: string;
   readonly description?: string;
   readonly hasValidFrontmatter: boolean;
@@ -146,10 +172,70 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+async function scanSingleSkillEntry(input: {
+  readonly entryPath: string;
+  readonly fallbackName: string;
+  readonly sourceDir: string;
+  readonly fromSkillsJson?: boolean;
+  readonly manifestPathNonAbsolute?: boolean;
+}): Promise<DiscoveredDiskSkill | undefined> {
+  let linkTarget: string | undefined;
+  try {
+    const lstat = await NodeFSP.lstat(input.entryPath);
+    if (lstat.isSymbolicLink()) {
+      try {
+        linkTarget = await NodeFSP.readlink(input.entryPath);
+      } catch {
+        linkTarget = undefined;
+      }
+    }
+    const stat = await NodeFSP.stat(input.entryPath);
+    if (!stat.isDirectory()) return undefined;
+  } catch {
+    return undefined;
+  }
+  const skillMdPath = NodePath.join(input.entryPath, "SKILL.md");
+  let rawContent: string;
+  try {
+    rawContent = await NodeFSP.readFile(skillMdPath, "utf8");
+  } catch {
+    return undefined;
+  }
+  const meta = parseSkillFrontmatter(rawContent);
+  const name = meta.name ?? input.fallbackName;
+  const contentHash = computeSkillContentHash(rawContent);
+  return {
+    name,
+    ...(meta.description !== undefined ? { description: meta.description } : {}),
+    hasValidFrontmatter: meta.hasValidFrontmatter,
+    skillMdPath,
+    dirPath: input.entryPath,
+    sourceDir: input.sourceDir,
+    contentHash,
+    ...(linkTarget !== undefined ? { linkTarget } : {}),
+    ...(input.fromSkillsJson ? { fromSkillsJson: true } : {}),
+    ...(input.manifestPathNonAbsolute ? { manifestPathNonAbsolute: true } : {}),
+  };
+}
+
 async function scanSkillsDirectory(
   rootDir: string,
   options?: { readonly fromSkillsJson?: boolean; readonly manifestPathNonAbsolute?: boolean },
 ): Promise<ReadonlyArray<DiscoveredDiskSkill>> {
+  // Antigravity skills.json entries can point directly to a single skill directory (containing SKILL.md)
+  // or to a parent directory whose immediate children are skill directories.
+  if (options?.fromSkillsJson === true) {
+    const directSkill = await scanSingleSkillEntry({
+      entryPath: rootDir,
+      fallbackName: NodePath.basename(rootDir),
+      sourceDir: rootDir,
+      fromSkillsJson: true,
+      ...(options.manifestPathNonAbsolute ? { manifestPathNonAbsolute: true } : {}),
+    });
+    if (directSkill !== undefined) {
+      return [directSkill];
+    }
+  }
   let entries: ReadonlyArray<string>;
   try {
     entries = await NodeFSP.readdir(rootDir);
@@ -160,41 +246,16 @@ async function scanSkillsDirectory(
   for (const entryName of entries) {
     if (isIgnoredSkillDirName(entryName)) continue;
     const entryPath = NodePath.join(rootDir, entryName);
-    let linkTarget: string | undefined;
-    try {
-      const lstat = await NodeFSP.lstat(entryPath);
-      if (lstat.isSymbolicLink()) {
-        try {
-          linkTarget = await NodeFSP.readlink(entryPath);
-        } catch {
-          linkTarget = undefined;
-        }
-      }
-      const stat = await NodeFSP.stat(entryPath);
-      if (!stat.isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    const skillMdPath = NodePath.join(entryPath, "SKILL.md");
-    let rawContent: string;
-    try {
-      rawContent = await NodeFSP.readFile(skillMdPath, "utf8");
-    } catch {
-      continue;
-    }
-    const meta = parseSkillFrontmatter(rawContent);
-    const name = meta.name ?? entryName;
-    results.push({
-      name,
-      ...(meta.description !== undefined ? { description: meta.description } : {}),
-      hasValidFrontmatter: meta.hasValidFrontmatter,
-      skillMdPath,
-      dirPath: entryPath,
+    const discovered = await scanSingleSkillEntry({
+      entryPath,
+      fallbackName: entryName,
       sourceDir: rootDir,
-      ...(linkTarget !== undefined ? { linkTarget } : {}),
       ...(options?.fromSkillsJson ? { fromSkillsJson: true } : {}),
       ...(options?.manifestPathNonAbsolute ? { manifestPathNonAbsolute: true } : {}),
     });
+    if (discovered !== undefined) {
+      results.push(discovered);
+    }
   }
   return results;
 }
@@ -276,7 +337,7 @@ function readAcpInstanceMeta(
  * Resolve each provider instance's real global skill discovery specification.
  * Grounded in actual CLI behavior on this machine (ignores single-project workspace skills).
  */
-async function resolveInstanceSkillSpec(input: {
+export async function resolveInstanceSkillSpec(input: {
   readonly provider: ServerProvider;
   readonly settings: ServerSettings;
   readonly stateDir: string;
@@ -289,6 +350,8 @@ async function resolveInstanceSkillSpec(input: {
   let factoryHomeOverride: string | undefined;
   let isFactoryDroid = false;
   let readsUniversalPool = false;
+  let profileDir: string | undefined;
+  let manifestPath: string | undefined;
 
   const pushUnique = (list: Array<string>, dir: string) => {
     const normalized = NodePath.resolve(dir);
@@ -309,24 +372,28 @@ async function resolveInstanceSkillSpec(input: {
     driverGroupLabel = "Antigravity";
     readsUniversalPool = false;
     const key = NodeCrypto.createHash("sha256").update(provider.instanceId).digest("hex");
-    const profileDir = NodePath.join(stateDir, "providers", "antigravity", key);
-    const profileSkillsDir = NodePath.join(profileDir, "config", "skills");
+    const instanceProfileDir = NodePath.join(stateDir, "providers", "antigravity", key);
+    profileDir = instanceProfileDir;
+    const profileSkillsDir = NodePath.join(instanceProfileDir, "config", "skills");
     const globalSkillsDir = NodePath.join(userHome, ".gemini", "config", "skills");
     writableGlobalSkillDir = globalSkillsDir;
     pushUnique(dirs, profileSkillsDir);
     pushUnique(dirs, globalSkillsDir);
 
-    const profileManifest = await readAntigravitySkillsJsonEntries(
-      NodePath.join(profileDir, "config", "skills.json"),
-      userHome,
-      platform,
-    );
-    const globalManifest = await readAntigravitySkillsJsonEntries(
-      NodePath.join(userHome, ".gemini", "config", "skills.json"),
-      userHome,
-      platform,
-    );
-    for (const entry of [...profileManifest, ...globalManifest]) {
+    const instanceManifestPath = NodePath.join(instanceProfileDir, "config", "skills.json");
+    manifestPath = instanceManifestPath;
+    // An initialized instance owns its manifest. Reading the global one too would leak another
+    // instance's skills into this profile and produce false duplicate reports.
+    const manifests = (await pathExists(instanceProfileDir))
+      ? [await readAntigravitySkillsJsonEntries(instanceManifestPath, userHome, platform)]
+      : [
+          await readAntigravitySkillsJsonEntries(
+            NodePath.join(userHome, ".gemini", "config", "skills.json"),
+            userHome,
+            platform,
+          ),
+        ];
+    for (const entry of manifests.flat()) {
       if (
         !manifestEntries.some(
           (existing) => existing.resolvedDir.toLowerCase() === entry.resolvedDir.toLowerCase(),
@@ -350,12 +417,14 @@ async function resolveInstanceSkillSpec(input: {
       const factoryHome = factoryHomeOverride ?? userHome;
       const factorySkillsDir = NodePath.join(factoryHome, ".factory", "skills");
       const factoryAgentsDir = NodePath.join(factoryHome, ".agents", "skills");
+      const factoryAgentDir = NodePath.join(factoryHome, ".agent", "skills");
       writableGlobalSkillDir = factorySkillsDir;
-      // Factory Droid reads <FACTORY_HOME>/.factory/skills and <FACTORY_HOME>/.agents/skills.
+      // Factory Droid reads .factory/skills, .agents/skills, and the singular .agent/skills.
       // When FACTORY_HOME_OVERRIDE is set, it reads the override home's .agents/skills, NOT the user's ~/.agents/skills!
       readsUniversalPool = factoryHomeOverride === undefined;
       pushUnique(dirs, factorySkillsDir);
       pushUnique(dirs, factoryAgentsDir);
+      pushUnique(dirs, factoryAgentDir);
     } else if (
       provider.instanceId.toLowerCase() === "dsh" ||
       meta.commandPath?.toLowerCase().includes("dsh") === true
@@ -413,6 +482,10 @@ async function resolveInstanceSkillSpec(input: {
   }
 
   return {
+    instanceId: provider.instanceId,
+    driver: provider.driver,
+    displayName: provider.displayName?.trim() || provider.instanceId,
+    enabled: provider.enabled,
     driverGroupKey,
     driverGroupLabel,
     dirs,
@@ -421,6 +494,8 @@ async function resolveInstanceSkillSpec(input: {
     manifestEntries,
     ...(factoryHomeOverride !== undefined ? { factoryHomeOverride } : {}),
     isFactoryDroid,
+    ...(profileDir !== undefined ? { profileDir } : {}),
+    ...(manifestPath !== undefined ? { manifestPath } : {}),
   };
 }
 
@@ -429,11 +504,12 @@ function isBetterDiskCandidate(
   incoming: DiscoveredDiskSkill,
 ): boolean {
   if (!existing) return true;
-  // Prefer valid absolute skills.json entry over non-absolute or bare junction.
+  // Windows Antigravity's Go walker skips junctions even below a skills.json parent. Only a real
+  // on-disk directory can make the cell usable, so junction entries always rank below one.
   const score = (skill: DiscoveredDiskSkill): number => {
-    if (skill.fromSkillsJson && !skill.manifestPathNonAbsolute) return 4;
+    if (skill.fromSkillsJson && !skill.manifestPathNonAbsolute && !skill.linkTarget) return 4;
     if (!skill.linkTarget && !skill.manifestPathNonAbsolute) return 3;
-    if (skill.fromSkillsJson) return 2;
+    if (skill.fromSkillsJson && !skill.manifestPathNonAbsolute) return 2;
     return 1;
   };
   return score(incoming) > score(existing);
@@ -495,6 +571,28 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
       const universalPoolDir = NodePath.resolve(NodePath.join(userHome, ".agents", "skills"));
       const universalSkills = await scanSkillsDirectory(universalPoolDir);
       const universalSkillNames = new Set<string>(universalSkills.map((skill) => skill.name));
+      const pathKey = (targetPath: string) =>
+        platform === "win32" ? targetPath.toLowerCase() : targetPath;
+      const allLocationsBySkill = new Map<string, Map<string, AggregatedSkillLocation>>();
+      const pushAggregatedLocation = (skillName: string, location: AggregatedSkillLocation) => {
+        const locations = allLocationsBySkill.get(skillName) ?? new Map();
+        if (!locations.has(pathKey(location.path))) {
+          locations.set(pathKey(location.path), location);
+        }
+        allLocationsBySkill.set(skillName, locations);
+      };
+      for (const skill of universalSkills) {
+        pushAggregatedLocation(skill.name, {
+          path: NodePath.resolve(skill.dirPath),
+          sourceDir: NodePath.resolve(skill.sourceDir),
+          layer: "universal",
+          ownerLabel: "Universal pool",
+          isLink: skill.linkTarget !== undefined,
+          ...(skill.linkTarget !== undefined ? { linkTarget: skill.linkTarget } : {}),
+          ...(skill.contentHash !== undefined ? { contentHash: skill.contentHash } : {}),
+          readsUniversalPool: false,
+        });
+      }
 
       // Scan default ~/.factory/skills once for Factory isolated profile diagnostic
       const defaultFactorySkillsDir = NodePath.join(userHome, ".factory", "skills");
@@ -575,13 +673,30 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
         }
 
         const diskMap = new Map<string, DiscoveredDiskSkill>();
+        const instanceOwnerLabel = provider.displayName?.trim() || provider.instanceId;
         for (const dir of spec.dirs) {
           const manifestEntry = manifestByDir.get(dir.toLowerCase());
           const scanned = await scanSkillsDirectory(dir, {
             ...(manifestEntry ? { fromSkillsJson: true } : {}),
             ...(manifestEntry?.nonAbsoluteOnWindows ? { manifestPathNonAbsolute: true } : {}),
           });
+          const layer: SkillDiskLayer =
+            pathKey(NodePath.resolve(dir)) === pathKey(universalPoolDir)
+              ? "universal"
+              : manifestEntry !== undefined
+                ? "instance_manifest"
+                : "provider_global";
           for (const skill of scanned) {
+            pushAggregatedLocation(skill.name, {
+              path: NodePath.resolve(skill.dirPath),
+              sourceDir: NodePath.resolve(skill.sourceDir),
+              layer,
+              ownerLabel: layer === "universal" ? "Universal pool" : instanceOwnerLabel,
+              isLink: skill.linkTarget !== undefined,
+              ...(skill.linkTarget !== undefined ? { linkTarget: skill.linkTarget } : {}),
+              ...(skill.contentHash !== undefined ? { contentHash: skill.contentHash } : {}),
+              readsUniversalPool: spec.readsUniversalPool,
+            });
             const existing = diskMap.get(skill.name);
             if (isBetterDiskCandidate(existing, skill)) {
               diskMap.set(skill.name, skill);
@@ -656,7 +771,6 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
             const runtimeEntry = runtimeMap.get(skillName);
             const isActiveRuntime = runtimeEntry !== undefined && runtimeEntry.enabled;
             if (isActiveRuntime) continue;
-            if (diskSkill.fromSkillsJson && !diskSkill.manifestPathNonAbsolute) continue;
             if (diskSkill.linkTarget !== undefined) {
               pushDiagnostic({
                 severity: "warning",
@@ -665,6 +779,21 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
                 detail: `请在 ~/.gemini/config/skills.json 的 entries 中使用绝对路径指向其真实父目录（当前联接目标：${diskSkill.linkTarget}）`,
               });
             }
+          }
+        }
+      }
+
+      // Precompute realpaths of skill directories relied upon by non-universal non-Antigravity instances
+      // (e.g. an isolated Factory instance whose .factory/skills links to ~/.factory/skills) so shared
+      // links are not misflagged as redundant universal copies.
+      const nonUniversalSharedRealRoots = new Set<string>();
+      for (const spec of specsByInstanceId.values()) {
+        if (spec.readsUniversalPool || spec.driver === "antigravity") continue;
+        for (const dir of spec.dirs) {
+          try {
+            nonUniversalSharedRealRoots.add(pathKey(await NodeFSP.realpath(dir)));
+          } catch {
+            nonUniversalSharedRealRoots.add(pathKey(NodePath.resolve(dir)));
           }
         }
       }
@@ -702,6 +831,17 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
           const spec = specsByInstanceId.get(instance.instanceId)!;
           const runtimeEntry = runtimeSkillsByInstance.get(instance.instanceId)?.get(skillName);
           const diskEntry = diskSkillsByInstance.get(instance.instanceId)?.get(skillName);
+          const diskFlags =
+            diskEntry === undefined
+              ? {}
+              : {
+                  isLink: diskEntry.linkTarget !== undefined,
+                  ...(diskEntry.fromSkillsJson ? { fromSkillsJson: true } : {}),
+                  removable: !(
+                    pathKey(NodePath.resolve(diskEntry.sourceDir)) === pathKey(universalPoolDir) &&
+                    diskEntry.fromSkillsJson !== true
+                  ),
+                };
 
           const isExpectedHere =
             scope === "universal" ||
@@ -714,13 +854,13 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
               path: runtimeEntry.path,
               ...(diskEntry?.sourceDir ? { sourceDir: diskEntry.sourceDir } : {}),
               ...(diskEntry?.linkTarget ? { linkTarget: diskEntry.linkTarget } : {}),
+              ...diskFlags,
             };
           } else if (diskEntry !== undefined) {
             const hasWindowsAgyJunctionCaveat =
               instance.driver === "antigravity" &&
               platform === "win32" &&
-              diskEntry.linkTarget !== undefined &&
-              (!diskEntry.fromSkillsJson || diskEntry.manifestPathNonAbsolute === true);
+              diskEntry.linkTarget !== undefined;
             const hasNonAbsoluteManifest =
               instance.driver === "antigravity" && diskEntry.manifestPathNonAbsolute === true;
             const missingFrontmatter = !diskEntry.hasValidFrontmatter;
@@ -731,6 +871,8 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
                 path: diskEntry.skillMdPath,
                 sourceDir: diskEntry.sourceDir,
                 ...(diskEntry.linkTarget ? { linkTarget: diskEntry.linkTarget } : {}),
+                ...diskFlags,
+                autoFixable: true,
                 reason: "skills.json 使用了 ~/ 路径，Windows 版 Antigravity 要求绝对路径",
               };
             } else if (hasWindowsAgyJunctionCaveat) {
@@ -739,6 +881,8 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
                 path: diskEntry.skillMdPath,
                 sourceDir: diskEntry.sourceDir,
                 ...(diskEntry.linkTarget ? { linkTarget: diskEntry.linkTarget } : {}),
+                ...diskFlags,
+                autoFixable: true,
                 reason: "Windows 目录联接会被 Antigravity 跳过，需通过 skills.json 绝对路径注册",
               };
             } else if (missingFrontmatter) {
@@ -747,6 +891,8 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
                 path: diskEntry.skillMdPath,
                 sourceDir: diskEntry.sourceDir,
                 ...(diskEntry.linkTarget ? { linkTarget: diskEntry.linkTarget } : {}),
+                ...diskFlags,
+                autoFixable: false,
                 reason: "SKILL.md 缺少合法 YAML frontmatter（name / description）",
               };
             } else {
@@ -759,6 +905,7 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
                 path: diskEntry.skillMdPath,
                 sourceDir: diskEntry.sourceDir,
                 ...(diskEntry.linkTarget ? { linkTarget: diskEntry.linkTarget } : {}),
+                ...diskFlags,
                 reason,
               };
             }
@@ -790,6 +937,47 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
           }
         }
 
+        const aggregatedLocations = [...(allLocationsBySkill.get(skillName)?.values() ?? [])];
+        const locations: ReadonlyArray<SkillDiskLocation> = aggregatedLocations.map((location) => ({
+          path: location.path,
+          sourceDir: location.sourceDir,
+          layer: location.layer,
+          ownerLabel: location.ownerLabel,
+          isLink: location.isLink,
+          ...(location.linkTarget !== undefined ? { linkTarget: location.linkTarget } : {}),
+          ...(location.contentHash !== undefined ? { contentHash: location.contentHash } : {}),
+        }));
+        // Compare distinct realpaths across ALL locations (including links to external canonical repos
+        // like ego-browser or lantu) so an independent physical copy alongside a linked universal entry
+        // is accurately flagged as a duplicate.
+        const distinctRealPaths = new Set(
+          await Promise.all(
+            aggregatedLocations.map(async (location) => {
+              try {
+                return pathKey(await NodeFSP.realpath(location.path));
+              } catch {
+                return pathKey(location.path);
+              }
+            }),
+          ),
+        );
+        const redundantUniversalPoolChecks = await Promise.all(
+          aggregatedLocations.map(async (location) => {
+            if (location.layer === "universal" || !location.readsUniversalPool) return false;
+            const parentRealKey = await NodeFSP.realpath(location.sourceDir)
+              .then((resolved) => pathKey(resolved))
+              .catch(() => pathKey(NodePath.resolve(location.sourceDir)));
+            if (nonUniversalSharedRealRoots.has(parentRealKey)) return false;
+            return true;
+          }),
+        );
+        const redundantUniversalPoolCopy = redundantUniversalPoolChecks.some(Boolean);
+        const contentHashes = new Set(
+          aggregatedLocations.flatMap((location) =>
+            location.contentHash === undefined ? [] : [location.contentHash],
+          ),
+        );
+
         skills.push({
           name: skillName,
           ...(meta.description !== undefined ? { description: meta.description } : {}),
@@ -799,6 +987,10 @@ export const buildSkillsOverview = Effect.fn("SkillsOverview.build")(function* (
           coveredEnabledCount: NonNegativeInt.make(coveredEnabled),
           expectedEnabledCount: NonNegativeInt.make(expectedEnabled),
           cells,
+          locations,
+          hasDuplicateCopies:
+            distinctRealPaths.size >= 2 || (isUniversal && redundantUniversalPoolCopy),
+          hasContentConflict: contentHashes.size > 1,
         });
       }
 

@@ -489,6 +489,8 @@ import {
 import {
   ServerGetSkillsOverviewInput,
   ServerGetSkillsOverviewResult,
+  ServerManageSkillsInput,
+  ServerManageSkillsResult,
   SkillsOverviewError,
 } from "./skillsOverview.ts";
 
@@ -621,6 +623,7 @@ export const WS_METHODS = {
   serverPrepareAcpRegistryAgent: "server.prepareAcpRegistryAgent",
   serverProbeAcpModelOptions: "server.probeAcpModelOptions",
   serverGetSkillsOverview: "server.getSkillsOverview",
+  serverManageSkills: "server.manageSkills",
   serverUninstallAcpRegistryManagedBinary: "server.uninstallAcpRegistryManagedBinary",
   serverAcceptAcpRegistryUrlAuth: "server.acceptAcpRegistryUrlAuth",
   serverListAcpRegistrySessions: "server.listAcpRegistrySessions",
@@ -1068,6 +1071,12 @@ const WsServerProbeAcpModelOptionsRpc = Rpc.make(WS_METHODS.serverProbeAcpModelO
 const WsServerGetSkillsOverviewRpc = Rpc.make(WS_METHODS.serverGetSkillsOverview, {
   payload: ServerGetSkillsOverviewInput,
   success: ServerGetSkillsOverviewResult,
+  error: Schema.Union([SkillsOverviewError, EnvironmentAuthorizationError]),
+});
+
+const WsServerManageSkillsRpc = Rpc.make(WS_METHODS.serverManageSkills, {
+  payload: ServerManageSkillsInput,
+  success: ServerManageSkillsResult,
   error: Schema.Union([SkillsOverviewError, EnvironmentAuthorizationError]),
 });
 
@@ -2542,6 +2551,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerPrepareAcpRegistryAgentRpc,
   WsServerProbeAcpModelOptionsRpc,
   WsServerGetSkillsOverviewRpc,
+  WsServerManageSkillsRpc,
   WsServerUninstallAcpRegistryManagedBinaryRpc,
   WsServerAcceptAcpRegistryUrlAuthRpc,
   WsServerListAcpRegistrySessionsRpc,

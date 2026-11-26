@@ -43,6 +43,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverRefreshProviders]: "server",
   [WS_METHODS.serverProbeAcpModelOptions]: "server",
   [WS_METHODS.serverGetSkillsOverview]: "server",
+  [WS_METHODS.serverManageSkills]: "server",
   [WS_METHODS.serverUpdateProvider]: "server",
   [WS_METHODS.providerAuthStart]: "provider",
   [WS_METHODS.providerConsumeResetCredit]: "provider",

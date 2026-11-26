@@ -76,9 +76,14 @@ export function providerTextColor(driverKind: ProviderDriverKind): {
 }
 
 const DSH_AGENT_ID = /^(?:deepseek-harness|dsh)$/iu;
+const DSH_DISPLAY_NAME = /^(?:deepseek\s+harness|dsh)$/iu;
 
 function isDeepSeekHarnessAgentId(agentId: string | undefined): boolean {
   return typeof agentId === "string" && DSH_AGENT_ID.test(agentId.trim());
+}
+
+function isDeepSeekHarnessDisplayName(displayName: string | undefined): boolean {
+  return typeof displayName === "string" && DSH_DISPLAY_NAME.test(displayName.trim());
 }
 
 export function resolveProviderInstanceAcpRegistryIconUrl(input: {
@@ -130,7 +135,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   const isDeepSeekHarness =
     isAcpRegistry &&
     acpRegistryIconUrl === null &&
-    isDeepSeekHarnessAgentId(props.acpRegistryAgentId);
+    (isDeepSeekHarnessAgentId(props.acpRegistryAgentId) ||
+      (props.acpRegistryAgentId === undefined && isDeepSeekHarnessDisplayName(props.displayName)));
 
   return (
     <span
