@@ -146,8 +146,14 @@ describe("teamOrchestration", () => {
 
     const implPrefix = compileSubagentNormCardPrefix({ stage: "implement", config });
     expect(implPrefix).toContain("执行子代理");
-    expect(implPrefix).toContain("TDD");
+    expect(implPrefix).toContain("垂直切片红→绿");
+    expect(implPrefix).toContain("禁止同构断言");
     expect(implPrefix).toContain("白名单");
+
+    const defaultCards = createDefaultTeamNormCards();
+    const grillCard = defaultCards.find((card) => card.id === "commander.grill");
+    expect(grillCard?.content).toContain("设计树前沿");
+    expect(grillCard?.content).toContain("明确推荐答案与理由");
 
     const reviewPrefix = compileSubagentNormCardPrefix({
       stage: "review",
