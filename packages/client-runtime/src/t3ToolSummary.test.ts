@@ -147,4 +147,39 @@ describe("summarizeT3ToolCalls", () => {
       failedCount: 0,
     });
   });
+
+  it("summarizes memo tool calls and deduplicates by input memoId", () => {
+    expect(
+      summarizeT3ToolCalls("memo-list", [completed({ action: "list" }, { memos: [] })]),
+    ).toEqual({
+      label: "Listed memos",
+      failedCount: 0,
+    });
+    expect(
+      summarizeT3ToolCalls("memo-add", [
+        completed({ action: "add", title: "A" }, { memo: { id: "memo-1" } }),
+        completed({ action: "add", title: "B" }, { memo: { id: "memo-2" } }),
+      ]),
+    ).toEqual({
+      label: "Added 2 memos",
+      failedCount: 0,
+    });
+    expect(
+      summarizeT3ToolCalls("memo-update", [
+        { input: { action: "update", memoId: "memo-1" }, output: undefined, outcome: "failed" },
+        { input: { action: "update", memoId: "memo-1" }, output: undefined, outcome: "failed" },
+      ]),
+    ).toEqual({
+      label: "Tried to update 1 memo",
+      failedCount: 2,
+    });
+    expect(
+      summarizeT3ToolCalls("memo-delete", [
+        completed({ action: "delete", memoId: "memo-1" }, { id: "memo-1", deleted: true }),
+      ]),
+    ).toEqual({
+      label: "Deleted 1 memo",
+      failedCount: 0,
+    });
+  });
 });

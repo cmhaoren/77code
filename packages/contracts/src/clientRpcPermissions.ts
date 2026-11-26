@@ -81,6 +81,11 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.scheduledTasksDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRunNow]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
+  [WS_METHODS.memosCreate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.memosUpdate]: AuthOrchestrationOperateScope,
+  [WS_METHODS.memosDelete]: AuthOrchestrationOperateScope,
+  // Starting a memo dispatches a turn, which can run commands on this environment.
+  [WS_METHODS.memosStart]: AuthOrchestrationOperateScope,
   [WS_METHODS.orchestrationCardsSave]: AuthSettingsWriteScope,
   [WS_METHODS.orchestrationCardsReset]: AuthSettingsWriteScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,

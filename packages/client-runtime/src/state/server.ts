@@ -1611,6 +1611,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
     }),
+    memosLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:memos:live",
+      tag: WS_METHODS.memosSubscribe,
+    }),
     // A cold transcript scan is measured in seconds, so keep the result around
     // long enough that switching windows or re-rendering does not rescan. With
     // nothing to show yet, the server's last scan answers first, then a plain
@@ -1957,6 +1961,22 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.scheduledTasksRotateWebhookToken,
       scheduler: configScheduler,
       concurrency: configConcurrency,
+    }),
+    memosCreate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memos:create",
+      tag: WS_METHODS.memosCreate,
+    }),
+    memosUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memos:update",
+      tag: WS_METHODS.memosUpdate,
+    }),
+    memosDelete: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memos:delete",
+      tag: WS_METHODS.memosDelete,
+    }),
+    memosStart: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memos:start",
+      tag: WS_METHODS.memosStart,
     }),
     listOrchestrationCards: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:orchestration-cards:list",

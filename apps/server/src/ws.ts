@@ -136,6 +136,7 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as MemoService from "./memos/MemoService.ts";
 import {
   listTeamNormCards,
   resetTeamNormCard,
@@ -1503,6 +1504,7 @@ export const layerWsRpc = (
       const threadViewers = yield* ThreadViewers.ThreadViewers;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const memos = yield* MemoService.MemoService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const guestShares = yield* GuestShareService.GuestShareService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -2473,6 +2475,11 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
+        [WS_METHODS.memosSubscribe]: (_input) => memos.subscribeList(),
+        [WS_METHODS.memosCreate]: (input) => memos.create(input),
+        [WS_METHODS.memosUpdate]: (input) => memos.update(input),
+        [WS_METHODS.memosDelete]: (input) => memos.delete(input),
+        [WS_METHODS.memosStart]: (input) => memos.start(input),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         [WS_METHODS.serverGetConfig]: (_input) =>
           loadServerConfig({

@@ -1804,6 +1804,76 @@ export function summarizeT3ToolCalls(
           );
       break;
     }
+    case "memo-list": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg("{count, plural, one {Listed memos} other {Listed memos {count} times}}", {
+              count,
+            }),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to list memos} other {Tried to list memos {count} times}}",
+              { count },
+            ),
+          );
+      break;
+    }
+    case "memo-add":
+    case "memo-update":
+    case "memo-delete": {
+      const count = countEntities(
+        selected.map(
+          (call) =>
+            id(asRecord(call.output?.memo)?.id) ??
+            id(call.output?.id) ??
+            id(call.input?.memoId) ??
+            id(call.input?.id),
+        ),
+      );
+      if (action === "memo-add") {
+        label = done
+          ? resolve(
+              msg("{count, plural, one {Added {count} memo} other {Added {count} memos}}", {
+                count,
+              }),
+            )
+          : resolve(
+              msg(
+                "{count, plural, one {Tried to add {count} memo} other {Tried to add {count} memos}}",
+                { count },
+              ),
+            );
+      } else if (action === "memo-update") {
+        label = done
+          ? resolve(
+              msg("{count, plural, one {Updated {count} memo} other {Updated {count} memos}}", {
+                count,
+              }),
+            )
+          : resolve(
+              msg(
+                "{count, plural, one {Tried to update {count} memo} other {Tried to update {count} memos}}",
+                { count },
+              ),
+            );
+      } else {
+        label = done
+          ? resolve(
+              msg("{count, plural, one {Deleted {count} memo} other {Deleted {count} memos}}", {
+                count,
+              }),
+            )
+          : resolve(
+              msg(
+                "{count, plural, one {Tried to delete {count} memo} other {Tried to delete {count} memos}}",
+                { count },
+              ),
+            );
+      }
+      break;
+    }
   }
   return { label, failedCount };
 }

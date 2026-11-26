@@ -70,4 +70,21 @@ describe("resolveT3McpSummaryAction", () => {
     );
     expect(resolveT3McpSummaryAction("delegate_task", { task: "x" })).toBe("delegate");
   });
+
+  it("summarizes each t3_memo action and names the tool", () => {
+    for (const [action, summary] of [
+      ["list", "memo-list"],
+      ["add", "memo-add"],
+      ["update", "memo-update"],
+      ["delete", "memo-delete"],
+    ] as const) {
+      expect(resolveT3McpToolDefinition("mcp__t3-code__t3_memo", { action })?.displayName).toBe(
+        "Manage sticky-note memos",
+      );
+      expect(resolveT3McpSummaryAction("mcp__t3-code__t3_memo", { action })).toBe(summary);
+    }
+    expect(resolveT3McpSummaryAction("t3_memo", {})).toBe("memo-update");
+    expect(resolveT3McpSummaryAction("t3_memo", { action: "unknown" })).toBe("memo-update");
+    expect(resolveT3McpToolPresentation("t3-code.t3_memo")?.logo).toBe("t3-code");
+  });
 });

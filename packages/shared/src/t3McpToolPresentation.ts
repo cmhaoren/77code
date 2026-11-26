@@ -15,6 +15,10 @@ export type T3McpToolSummaryAction =
   | "schedule-list"
   | "schedule-update"
   | "schedule-delete"
+  | "memo-list"
+  | "memo-add"
+  | "memo-update"
+  | "memo-delete"
   | "thread-create"
   | "thread-list"
   | "thread-read"
@@ -225,6 +229,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Delete", "Deleting", "Requested deletion of", "a scheduled task"],
     "schedule-delete",
   ),
+  t3_memo: tool(["Manage", "Managing", "Managed", "sticky-note memos"], "memo-update"),
   request_secret: tool(["Ask for", "Asking for", "Asked for", "a secret"], "secret-request"),
   create_threads: tool(["Create", "Creating", "Created", "T3 threads"], "thread-create"),
   t3_thread_start: tool(["Start", "Starting", "Started", "a T3 thread"], "thread-create"),
@@ -540,6 +545,16 @@ const ACTION_SUMMARIES: Readonly<
     modelSelection === undefined ? "thread-configuration" : "thread-configure",
   schedule_task: ({ scheduledTaskId }) =>
     scheduledTaskId === undefined ? "schedule-create" : "schedule-update",
+  t3_memo: ({ action }) =>
+    action === "list"
+      ? "memo-list"
+      : action === "add"
+        ? "memo-add"
+        : action === "update"
+          ? "memo-update"
+          : action === "delete"
+            ? "memo-delete"
+            : undefined,
 };
 
 export function resolveT3McpSummaryAction(

@@ -1,4 +1,11 @@
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ChartNoAxesColumnIcon,
+  SettingsIcon,
+  StickyNoteIcon,
+} from "lucide-react";
+import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
 import { memo } from "react";
@@ -8,13 +15,19 @@ import { useAtomValue } from "@effect/atom-react";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { shortcutLabelForCommand } from "../../keybindings";
 import {
+  EMPTY_MEMOS_ATOM,
+  useActiveMemoEnvironmentId,
+  useMemoDrawerStore,
+} from "../../memoDrawerStore";
+import {
   navigateHistory,
   useCanNavigateHistory,
   type HistoryDirection,
 } from "../../navigationHistory";
-import { primaryServerKeybindingsAtom } from "../../state/server";
+import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
+import { countActiveMemos, formatMemoBadgeCount } from "../memo/memoLaunch.logic";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -200,6 +213,60 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
+const SidebarMemoUtilityItem = memo(function SidebarMemoUtilityItem({
+  onAfterToggle,
+}: {
+  readonly onAfterToggle: () => void;
+}) {
+  const gt = useGT();
+  const activeEnvironmentId = useActiveMemoEnvironmentId();
+  const isOpen = useMemoDrawerStore((state) => state.isOpen);
+  const toggleOpen = useMemoDrawerStore((state) => state.toggleOpen);
+  const memosResult = useAtomValue(
+    activeEnvironmentId
+      ? serverEnvironment.memosLive({ environmentId: activeEnvironmentId, input: {} })
+      : EMPTY_MEMOS_ATOM,
+  );
+  const memos = AsyncResult.getOrElse(memosResult, () => ({ memos: [] })).memos;
+  const badgeText = formatMemoBadgeCount(countActiveMemos(memos));
+  const label = gt("便签");
+
+  return (
+    <SidebarMenuItem className="shrink-0">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SidebarMenuButton
+              aria-label={label}
+              aria-pressed={isOpen}
+              className="size-7"
+              isActive={isOpen}
+              onClick={() => {
+                toggleOpen();
+                onAfterToggle();
+              }}
+              size="icon"
+            >
+              <span className="relative inline-flex items-center justify-center">
+                <StickyNoteIcon />
+                {badgeText !== null ? (
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute -top-2 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-warning px-1 text-3xs font-semibold leading-none text-background shadow-xs tabular-nums"
+                  >
+                    {badgeText}
+                  </span>
+                ) : null}
+              </span>
+            </SidebarMenuButton>
+          }
+        />
+        <TooltipPopup side="top">{label}</TooltipPopup>
+      </Tooltip>
+    </SidebarMenuItem>
+  );
+});
+
 function SidebarUtilityItem({
   icon,
   label,
@@ -214,7 +281,7 @@ function SidebarUtilityItem({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton aria-label={label} className="size-7" onClick={onClick} size="icon">
               {icon}
             </SidebarMenuButton>
           }
@@ -305,6 +372,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label={gt("Usage")}
             onClick={handleUsageClick}
           />
+          <SidebarMemoUtilityItem onAfterToggle={closeMobileSidebar} />
         </>
       )}
       <SidebarThreadUndoNotice />

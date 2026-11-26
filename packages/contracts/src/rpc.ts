@@ -450,6 +450,18 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
+import {
+  MemoCreateInput,
+  MemoDeleteInput,
+  MemoDeleteResult,
+  MemoError,
+  MemoListInput,
+  MemoListResult,
+  MemoMutationResult,
+  MemoStartInput,
+  MemoStartResult,
+  MemoUpdateInput,
+} from "./memo.ts";
 import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
 import {
   ProjectCloneActionInput,
@@ -664,6 +676,12 @@ export const WS_METHODS = {
   guestShareCreate: "guestShare.create",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
+
+  memosSubscribe: "memos.subscribe",
+  memosCreate: "memos.create",
+  memosUpdate: "memos.update",
+  memosDelete: "memos.delete",
+  memosStart: "memos.start",
 
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
@@ -2469,6 +2487,37 @@ const WsScheduledTasksGetWebhookDeliveryRpc = Rpc.make(
   },
 );
 
+const WsMemosSubscribeRpc = Rpc.make(WS_METHODS.memosSubscribe, {
+  payload: MemoListInput,
+  success: MemoListResult,
+  error: Schema.Union([MemoError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsMemosCreateRpc = Rpc.make(WS_METHODS.memosCreate, {
+  payload: MemoCreateInput,
+  success: MemoMutationResult,
+  error: Schema.Union([MemoError, EnvironmentAuthorizationError]),
+});
+
+const WsMemosUpdateRpc = Rpc.make(WS_METHODS.memosUpdate, {
+  payload: MemoUpdateInput,
+  success: MemoMutationResult,
+  error: Schema.Union([MemoError, EnvironmentAuthorizationError]),
+});
+
+const WsMemosDeleteRpc = Rpc.make(WS_METHODS.memosDelete, {
+  payload: MemoDeleteInput,
+  success: MemoDeleteResult,
+  error: Schema.Union([MemoError, EnvironmentAuthorizationError]),
+});
+
+const WsMemosStartRpc = Rpc.make(WS_METHODS.memosStart, {
+  payload: MemoStartInput,
+  success: MemoStartResult,
+  error: Schema.Union([MemoError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -2589,6 +2638,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsSecretsAnswerRequestRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
+  WsMemosSubscribeRpc,
+  WsMemosCreateRpc,
+  WsMemosUpdateRpc,
+  WsMemosDeleteRpc,
+  WsMemosStartRpc,
   WsServerReportClientActivityRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
