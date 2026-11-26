@@ -288,7 +288,8 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(ModelManifest, make);
+// 77 Code serves the bundled model manifest locally without polling upstream pingdotgg/t3code.
+export const layer = layerBundledOnly;
 
 export const layerTest = Layer.suspend(() =>
   layerModelCatalog.pipe(Layer.provideMerge(layerBundledOnly)),

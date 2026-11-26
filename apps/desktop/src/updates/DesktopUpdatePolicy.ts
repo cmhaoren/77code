@@ -30,10 +30,10 @@ export class DesktopUpdatePolicy extends Context.Service<DesktopUpdatePolicy, Up
 ) {}
 
 export const unmanagedUpdatePolicy: UpdatePolicy = {
-  mode: "auto",
+  mode: "off",
   feedUrl: undefined,
-  allowNightly: true,
-  message: null,
+  allowNightly: false,
+  message: "Official T3 Code auto-updates are disabled in 77 Code.",
 };
 
 function resolveUpdatePolicy(document: ManagedPolicyDocument | undefined): UpdatePolicy {

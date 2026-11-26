@@ -2,6 +2,7 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m as resolveMessage } from "~/i18n/messages";
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
+import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { CheckIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
@@ -2551,11 +2552,11 @@ export function AboutSettingsPanel() {
             />
           </>
         )}
-        <MobileAppSettingsRow />
+        {hasCloudPublicConfig() ? <MobileAppSettingsRow /> : null}
         {primaryEnvironmentId === null ? null : (
           <SettingsRow
             {...setting("welcome-page")}
-            description={gt("See your agents, import projects, and set up your phone.")}
+            description={gt("See your agents and import projects.")}
             control={
               <Button size="sm" variant="outline" render={<Link to="/welcome" />}>
                 <T context="verb, opens a page">Open</T>
@@ -2570,22 +2571,26 @@ export function AboutSettingsPanel() {
           {...setting("privacy-policy")}
           description={
             telemetryOff === undefined
-              ? gt("How we handle your data, including the anonymous usage data T3 Code collects.")
-              : gt("How we handle your data. {telemetryOff}", { telemetryOff })
+              ? gt(
+                  "77 Code runs locally with product telemetry, T3 Connect cloud relay, and official auto-updates disabled.",
+                )
+              : gt("How 77 Code handles your data. {telemetryOff}", { telemetryOff })
           }
           control={
-            <Button
-              render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
-              size="sm"
-              variant="outline"
-            >
-              <T>View policy</T>
-            </Button>
+            hasCloudPublicConfig() ? (
+              <Button
+                render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
+                size="sm"
+                variant="outline"
+              >
+                <T>View policy</T>
+              </Button>
+            ) : null
           }
         />
         <SettingsRow
           {...setting("open-source-licenses")}
-          description={gt("Notices for dependencies, assets, and optional tools used by T3 Code.")}
+          description={gt("Notices for dependencies, assets, and optional tools used by 77 Code.")}
           control={
             <Button
               render={<Link to="/settings/open-source-licenses" />}
