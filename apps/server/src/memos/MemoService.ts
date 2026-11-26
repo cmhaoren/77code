@@ -1,4 +1,6 @@
 import {
+  ChatAttachmentId,
+  ChatImageAttachment,
   clampManagedRuntimeMode,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -15,12 +17,16 @@ import {
   type MemoStartResult,
   type MemoUpdateInput,
   MessageId,
+  type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Base64 from "effect/encoding/Base64";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -28,6 +34,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 
+import {
+  attachmentRelativePath,
+  chatAttachmentStableKey,
+  createDeterministicAttachmentId,
+} from "../attachmentStore.ts";
+import * as ServerConfig from "../config.ts";
+import { parseBase64DataUrl } from "../imageMime.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
@@ -43,6 +56,7 @@ interface MemoRow {
   readonly thread_id: string | null;
   readonly thread_title: string | null;
   readonly project_id: string | null;
+  readonly attachments_json: string;
   readonly created_at: string;
   readonly updated_at: string;
   readonly started_at: string | null;
@@ -89,6 +103,12 @@ export function buildMemoActivationPrompt(memo: Pick<Memo, "title" | "content">)
 const isoNow = Effect.map(DateTime.now, (now) => DateTime.formatIso(DateTime.toUtc(now)));
 
 const decodeMemo = Schema.decodeUnknownEffect(Memo);
+const decodeStoredAttachments = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(ChatImageAttachment)),
+);
+const encodeStoredAttachments = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(ChatImageAttachment)),
+);
 
 const selectAllMemos = (sql: SqlClient.SqlClient) =>
   sql<MemoRow>`
@@ -102,6 +122,7 @@ const selectAllMemos = (sql: SqlClient.SqlClient) =>
       thread_id,
       thread_title,
       project_id,
+      attachments_json,
       created_at,
       updated_at,
       started_at,
@@ -118,6 +139,9 @@ export const layer = Layer.effect(
   MemoService,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const config = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const random = yield* SecureRandom.SecureRandom;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
@@ -129,8 +153,90 @@ export const layer = Layer.effect(
 
     const notifyChanged = PubSub.publish(changes, undefined).pipe(Effect.asVoid);
 
-    const decodeRow = (row: MemoRow): Effect.Effect<Memo, MemoError> =>
-      decodeMemo({
+    const persistMemoAttachments = Effect.fn("MemoService.persistAttachments")(function* (
+      memoId: MemoId,
+      uploads: ReadonlyArray<UploadChatImageAttachment>,
+      salt: string,
+    ) {
+      if (uploads.length === 0) return [] as ReadonlyArray<ChatImageAttachment>;
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true }).pipe(
+        Effect.mapError((cause) =>
+          memoError("Could not prepare memo attachment storage.", {
+            memoId,
+            code: "storage_failed",
+            cause,
+          }),
+        ),
+      );
+      return yield* Effect.forEach(
+        uploads.map((attachment, index) => ({ attachment, index })),
+        Effect.fn("MemoService.persistAttachment")(function* ({ attachment, index }) {
+          const parsed = parseBase64DataUrl(attachment.dataUrl);
+          if (parsed === null || parsed.mimeType !== attachment.mimeType.toLowerCase()) {
+            return yield* memoError(`Attachment ${attachment.name} has an invalid image payload.`, {
+              memoId,
+              code: "storage_failed",
+            });
+          }
+          const bytes = yield* Effect.fromResult(Base64.decode(parsed.base64)).pipe(
+            Effect.mapError((cause) =>
+              memoError(`Attachment ${attachment.name} is not valid base64.`, {
+                memoId,
+                code: "storage_failed",
+                cause,
+              }),
+            ),
+          );
+          if (bytes.byteLength !== attachment.sizeBytes) {
+            return yield* memoError(
+              `Attachment ${attachment.name} size does not match its payload.`,
+              { memoId, code: "storage_failed" },
+            );
+          }
+          const rawId = createDeterministicAttachmentId(
+            `memo-${memoId}`,
+            chatAttachmentStableKey(salt, index, bytes),
+          );
+          if (rawId === null) {
+            return yield* memoError("Could not allocate a memo attachment identifier.", {
+              memoId,
+              code: "storage_failed",
+            });
+          }
+          const persisted: ChatImageAttachment = {
+            type: "image",
+            id: ChatAttachmentId.make(rawId),
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+          };
+          const relPath = attachmentRelativePath(persisted);
+          if (relPath === null) {
+            return yield* memoError("Could not resolve a memo attachment filename.", {
+              memoId,
+              code: "storage_failed",
+            });
+          }
+          yield* fileSystem.writeFile(path.join(config.attachmentsDir, relPath), bytes).pipe(
+            Effect.mapError((cause) =>
+              memoError(`Could not persist attachment ${attachment.name}.`, {
+                memoId,
+                code: "storage_failed",
+                cause,
+              }),
+            ),
+          );
+          return persisted;
+        }),
+        { concurrency: 2 },
+      );
+    });
+
+    const decodeRow = (row: MemoRow): Effect.Effect<Memo, MemoError> => {
+      const decodedAttachments = decodeStoredAttachments(row.attachments_json || "[]");
+      const attachments =
+        decodedAttachments._tag === "Some" ? decodedAttachments.value : ([] as const);
+      return decodeMemo({
         id: row.id,
         title: row.title,
         content: row.content,
@@ -140,6 +246,7 @@ export const layer = Layer.effect(
         threadId: row.thread_id,
         threadTitle: row.thread_title,
         projectId: row.project_id,
+        attachments,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         startedAt: row.started_at,
@@ -149,6 +256,7 @@ export const layer = Layer.effect(
           memoError("Could not decode a memo row.", { code: "storage_failed", cause }),
         ),
       );
+    };
 
     const listRows = () =>
       selectAllMemos(sql).pipe(
@@ -175,6 +283,7 @@ export const layer = Layer.effect(
           thread_id,
           thread_title,
           project_id,
+          attachments_json,
           created_at,
           updated_at,
           started_at,
@@ -203,6 +312,7 @@ export const layer = Layer.effect(
           thread_id: memo.threadId,
           thread_title: memo.threadTitle,
           project_id: memo.projectId,
+          attachments_json: encodeStoredAttachments(memo.attachments),
           created_at: memo.createdAt,
           updated_at: memo.updatedAt,
           started_at: memo.startedAt,
@@ -218,7 +328,14 @@ export const layer = Layer.effect(
     const updateEditableFields = (
       memo: Pick<
         Memo,
-        "id" | "title" | "content" | "status" | "color" | "updatedAt" | "completedAt"
+        | "id"
+        | "title"
+        | "content"
+        | "status"
+        | "color"
+        | "attachments"
+        | "updatedAt"
+        | "completedAt"
       >,
       causeMessage: string,
     ): Effect.Effect<Memo, MemoError> =>
@@ -228,12 +345,13 @@ export const layer = Layer.effect(
           content = ${memo.content},
           status = ${memo.status},
           color = ${memo.color},
+          attachments_json = ${encodeStoredAttachments(memo.attachments)},
           updated_at = ${memo.updatedAt},
           completed_at = ${memo.completedAt}
         WHERE id = ${memo.id}
         RETURNING
           id, title, content, status, color, source,
-          thread_id, thread_title, project_id,
+          thread_id, thread_title, project_id, attachments_json,
           created_at, updated_at, started_at, completed_at
       `.pipe(
         Effect.mapError((cause) =>
@@ -270,7 +388,7 @@ export const layer = Layer.effect(
         WHERE id = ${patch.id}
         RETURNING
           id, title, content, status, color, source,
-          thread_id, thread_title, project_id,
+          thread_id, thread_title, project_id, attachments_json,
           created_at, updated_at, started_at, completed_at
       `.pipe(
         Effect.mapError((cause) =>
@@ -295,8 +413,13 @@ export const layer = Layer.effect(
     const create: MemoService["Service"]["create"] = Effect.fn("MemoService.create")(
       function* (input) {
         const now = yield* isoNow;
+        const id = yield* newMemoId;
+        const persistedAttachments =
+          input.attachments && input.attachments.length > 0
+            ? yield* persistMemoAttachments(id, input.attachments, now)
+            : [];
         const memo: Memo = {
-          id: yield* newMemoId,
+          id,
           title: input.title.trim(),
           content: input.content ?? "",
           status: "todo",
@@ -305,6 +428,7 @@ export const layer = Layer.effect(
           threadId: input.threadId ?? null,
           threadTitle: input.threadTitle ?? null,
           projectId: input.projectId ?? null,
+          attachments: persistedAttachments,
           createdAt: now,
           updatedAt: now,
           startedAt: null,
@@ -329,6 +453,14 @@ export const layer = Layer.effect(
         const status = input.status ?? existing.status;
         const completedAt =
           status === existing.status ? existing.completedAt : status === "done" ? now : null;
+        const keptAttachments =
+          input.keepAttachmentIds === undefined
+            ? existing.attachments
+            : existing.attachments.filter((att) => input.keepAttachmentIds!.includes(att.id));
+        const addedAttachments =
+          input.attachments && input.attachments.length > 0
+            ? yield* persistMemoAttachments(existing.id, input.attachments, now)
+            : [];
         const updated = yield* updateEditableFields(
           {
             id: existing.id,
@@ -336,6 +468,7 @@ export const layer = Layer.effect(
             content: input.content ?? existing.content,
             status,
             color: input.color ?? existing.color,
+            attachments: [...keptAttachments, ...addedAttachments],
             updatedAt: now,
             completedAt,
           },
@@ -365,6 +498,69 @@ export const layer = Layer.effect(
       },
     );
 
+    const sendToExistingThread = Effect.fn("MemoService.sendToExistingThread")(function* (
+      memo: Memo,
+      targetThreadId: NonNullable<Memo["threadId"]>,
+      promptText: string,
+      now: string,
+    ) {
+      const thread = yield* threadManagement.getThreadShell(targetThreadId).pipe(
+        Effect.mapError((cause) =>
+          memoError("Could not read the memo's thread.", {
+            memoId: memo.id,
+            code: "storage_failed",
+            cause,
+          }),
+        ),
+      );
+      if (thread === null || thread.deletedAt !== null || thread.archivedAt !== null) {
+        return yield* memoError("That memo's thread is archived or no longer exists.", {
+          memoId: memo.id,
+          code: "thread_not_found",
+        });
+      }
+      const sent = yield* threadManagement
+        .sendToThread({
+          projectId: thread.projectId,
+          commandId: yield* newCommandId,
+          threadId: targetThreadId,
+          messageId: yield* newMessageId,
+          text: promptText,
+          attachments: memo.attachments,
+          mode: "queue",
+          createdBy: "user",
+          creationSource: "web",
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            memoError("Could not send the memo to its thread.", {
+              memoId: memo.id,
+              code: "dispatch_failed",
+              cause,
+            }),
+          ),
+        );
+      const updated = yield* recordMemoStarted(
+        {
+          id: memo.id,
+          threadId: targetThreadId,
+          threadTitle: thread.title.length > 0 ? thread.title : memo.threadTitle,
+          projectId: thread.projectId,
+          startedAt: now,
+          updatedAt: now,
+        },
+        "Could not update the memo after sending it.",
+      );
+      yield* notifyChanged;
+      return {
+        memo: updated,
+        threadId: targetThreadId,
+        projectId: thread.projectId,
+        createdNewThread: false,
+        queued: sent.delivery === "queued",
+      } satisfies MemoStartResult;
+    });
+
     const runStart = Effect.fn("MemoService.start")(function* (input: MemoStartInput) {
       const memo = yield* getMemo(input.id);
       if (memo === null) {
@@ -376,62 +572,12 @@ export const layer = Layer.effect(
       const promptText = buildMemoActivationPrompt(memo);
       const now = yield* isoNow;
 
+      if (input.targetThreadId !== undefined) {
+        return yield* sendToExistingThread(memo, input.targetThreadId, promptText, now);
+      }
+
       if (memo.threadId !== null && input.launch === undefined) {
-        const thread = yield* threadManagement.getThreadShell(memo.threadId).pipe(
-          Effect.mapError((cause) =>
-            memoError("Could not read the memo's thread.", {
-              memoId: memo.id,
-              code: "storage_failed",
-              cause,
-            }),
-          ),
-        );
-        if (thread === null || thread.deletedAt !== null || thread.archivedAt !== null) {
-          return yield* memoError("That memo's thread is archived or no longer exists.", {
-            memoId: memo.id,
-            code: "thread_not_found",
-          });
-        }
-        const sent = yield* threadManagement
-          .sendToThread({
-            projectId: thread.projectId,
-            commandId: yield* newCommandId,
-            threadId: memo.threadId,
-            messageId: yield* newMessageId,
-            text: promptText,
-            attachments: [],
-            mode: "queue",
-            createdBy: "user",
-            creationSource: "web",
-          })
-          .pipe(
-            Effect.mapError((cause) =>
-              memoError("Could not send the memo to its thread.", {
-                memoId: memo.id,
-                code: "dispatch_failed",
-                cause,
-              }),
-            ),
-          );
-        const updated = yield* recordMemoStarted(
-          {
-            id: memo.id,
-            threadId: memo.threadId,
-            threadTitle: thread.title.length > 0 ? thread.title : memo.threadTitle,
-            projectId: thread.projectId,
-            startedAt: now,
-            updatedAt: now,
-          },
-          "Could not update the memo after sending it.",
-        );
-        yield* notifyChanged;
-        return {
-          memo: updated,
-          threadId: memo.threadId,
-          projectId: thread.projectId,
-          createdNewThread: false,
-          queued: sent.delivery === "queued",
-        };
+        return yield* sendToExistingThread(memo, memo.threadId, promptText, now);
       }
 
       if (input.launch !== undefined) {
@@ -469,7 +615,7 @@ export const layer = Layer.effect(
             initialMessage: {
               messageId: yield* newMessageId,
               text: promptText,
-              attachments: [],
+              attachments: memo.attachments,
             },
             createdBy: "user",
             creationSource: "web",

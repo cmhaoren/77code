@@ -17,6 +17,7 @@ import {
   createInitialMemoLaunchDraft,
   filterMemos,
   filterSelectableMemoProjects,
+  filterSelectableMemoThreads,
   formatMemoBadgeCount,
   getMemoThinkingControl,
   selectMemoLaunchModel,
@@ -203,6 +204,7 @@ function makeMemo(overrides: Omit<Partial<Memo>, "id"> & { id: string; title: st
     threadId: overrides.threadId ?? null,
     threadTitle: overrides.threadTitle ?? null,
     projectId: overrides.projectId ?? null,
+    attachments: overrides.attachments ?? [],
     createdAt: overrides.createdAt ?? "2026-11-26T00:00:00.000Z",
     updatedAt: overrides.updatedAt ?? "2026-11-26T00:00:00.000Z",
     startedAt: overrides.startedAt ?? null,
@@ -469,5 +471,65 @@ describe("countActiveMemos, formatMemoBadgeCount & filterMemos", () => {
     expect(filterMemos(memos, "todo").map((memo) => memo.id)).toEqual([MemoId.make("m1")]);
     expect(filterMemos(memos, "in_progress").map((memo) => memo.id)).toEqual([MemoId.make("m2")]);
     expect(filterMemos(memos, "done").map((memo) => memo.id)).toEqual([MemoId.make("m3")]);
+  });
+});
+
+describe("filterSelectableMemoThreads", () => {
+  it("filters by environment, excludes archived/deleted threads, matches query, and sorts newest first", () => {
+    const threads = [
+      {
+        id: "t-older",
+        environmentId: "env-1",
+        projectId: "p-1",
+        title: "Fix sidebar badge",
+        archivedAt: null,
+        deletedAt: null,
+        updatedAt: "2026-11-26T08:00:00.000Z",
+      },
+      {
+        id: "t-newer",
+        environmentId: "env-1",
+        projectId: "p-1",
+        title: "Fix memo drawer images",
+        archivedAt: null,
+        deletedAt: null,
+        updatedAt: "2026-11-26T10:00:00.000Z",
+      },
+      {
+        id: "t-archived",
+        environmentId: "env-1",
+        projectId: "p-1",
+        title: "Fix archived thread",
+        archivedAt: "2026-11-26T11:00:00.000Z",
+        deletedAt: null,
+        updatedAt: "2026-11-26T11:00:00.000Z",
+      },
+      {
+        id: "t-deleted",
+        environmentId: "env-1",
+        projectId: "p-1",
+        title: "Fix deleted thread",
+        archivedAt: null,
+        deletedAt: "2026-11-26T11:00:00.000Z",
+        updatedAt: "2026-11-26T11:00:00.000Z",
+      },
+      {
+        id: "t-other-env",
+        environmentId: "env-2",
+        projectId: "p-2",
+        title: "Fix remote thread",
+        archivedAt: null,
+        deletedAt: null,
+        updatedAt: "2026-11-26T12:00:00.000Z",
+      },
+    ];
+
+    expect(filterSelectableMemoThreads(threads, "env-1").map((t) => t.id)).toEqual([
+      "t-newer",
+      "t-older",
+    ]);
+    expect(filterSelectableMemoThreads(threads, "env-1", "memo").map((t) => t.id)).toEqual([
+      "t-newer",
+    ]);
   });
 });

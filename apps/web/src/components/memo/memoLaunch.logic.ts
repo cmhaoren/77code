@@ -314,6 +314,38 @@ export function formatMemoBadgeCount(count: number): string | null {
   return count > 99 ? "99+" : String(count);
 }
 
+export interface SelectableMemoThreadLike {
+  readonly id: string;
+  readonly environmentId?: string;
+  readonly projectId: string;
+  readonly title: string;
+  readonly archivedAt?: string | null;
+  readonly deletedAt?: string | null;
+  readonly updatedAt: string;
+}
+
+export function filterSelectableMemoThreads<TThread extends SelectableMemoThreadLike>(
+  threads: ReadonlyArray<TThread>,
+  environmentId?: string | null,
+  query = "",
+): ReadonlyArray<TThread> {
+  const normalizedQuery = query.trim().toLowerCase();
+  return threads
+    .filter((thread) => {
+      if (environmentId && thread.environmentId && thread.environmentId !== environmentId) {
+        return false;
+      }
+      if ((thread.archivedAt ?? null) !== null || (thread.deletedAt ?? null) !== null) {
+        return false;
+      }
+      if (normalizedQuery.length > 0 && !thread.title.toLowerCase().includes(normalizedQuery)) {
+        return false;
+      }
+      return true;
+    })
+    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
 export function filterMemos<TMemo extends Pick<Memo, "status">>(
   memos: ReadonlyArray<TMemo>,
   filter: MemoFilter,

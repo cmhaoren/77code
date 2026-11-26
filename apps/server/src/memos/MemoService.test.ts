@@ -1,4 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -21,6 +22,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type * as SqlClient from "effect/sql/SqlClient";
 
+import * as ServerConfig from "../config.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -70,6 +72,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
     Layer.provideMerge(
       Layer.mergeAll(
         SqlitePersistence.layerMemory,
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-memo-service-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
         NodeCrypto.layer,
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({
           launch: (input) => {
@@ -535,6 +540,93 @@ describe("MemoService", () => {
           });
           assert.equal(harness.launchCalls[0]?.runtimeMode, "approval-required");
           assert.equal(harness.launchCalls[0]?.interactionMode, "default");
+        }),
+    ),
+  );
+
+  it.effect("persists image attachments on create/update and forwards them on start", () =>
+    run(
+      {
+        threads: new Map([
+          [
+            "thread-existing",
+            threadShell({ projectId: "project-existing", title: "Existing Chat" }),
+          ],
+        ]),
+      },
+      (harness) =>
+        Effect.gen(function* () {
+          const service = yield* MemoService.MemoService;
+          const pngBytes = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2d8AAAAASUVORK5CYII=",
+            "base64",
+          );
+          const dataUrl = `data:image/png;base64,${pngBytes.toString("base64")}`;
+
+          const created = yield* service.create({
+            title: "With screenshot",
+            content: "Check this layout",
+            attachments: [
+              {
+                type: "image",
+                name: "shot.png",
+                mimeType: "image/png",
+                sizeBytes: pngBytes.byteLength,
+                dataUrl,
+              },
+            ],
+          });
+          assert.lengthOf(created.memo.attachments, 1);
+          assert.equal(created.memo.attachments[0]?.name, "shot.png");
+
+          const started = yield* service.start({
+            id: created.memo.id,
+            targetThreadId: ThreadId.make("thread-existing"),
+          });
+          assert.isFalse(started.createdNewThread);
+          assert.equal(started.threadId, ThreadId.make("thread-existing"));
+          assert.equal(started.memo.threadId, ThreadId.make("thread-existing"));
+          assert.equal(started.memo.threadTitle, "Existing Chat");
+          assert.equal(started.memo.status, "in_progress");
+          assert.lengthOf(harness.sendCalls, 1);
+          assert.lengthOf(harness.sendCalls[0]?.attachments ?? [], 1);
+          assert.equal(harness.sendCalls[0]?.attachments[0]?.id, created.memo.attachments[0]?.id);
+
+          const cleared = yield* service.update({
+            id: created.memo.id,
+            keepAttachmentIds: [],
+          });
+          assert.lengthOf(cleared.memo.attachments, 0);
+        }),
+    ),
+  );
+
+  it.effect("rejects starting a memo into an archived targetThreadId", () =>
+    run(
+      {
+        threads: new Map([
+          [
+            "thread-archived",
+            threadShell({
+              projectId: "project-existing",
+              title: "Old Chat",
+              archivedAt: "2026-01-03T00:00:00.000Z",
+            }),
+          ],
+        ]),
+      },
+      () =>
+        Effect.gen(function* () {
+          const service = yield* MemoService.MemoService;
+          const created = yield* service.create({ title: "Target archived" });
+          const error = yield* service
+            .start({
+              id: created.memo.id,
+              targetThreadId: ThreadId.make("thread-archived"),
+            })
+            .pipe(Effect.flip);
+          assert.isTrue(isMemoError(error));
+          assert.equal(error.code, "thread_not_found");
         }),
     ),
   );

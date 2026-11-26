@@ -1,10 +1,4 @@
-import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  ChartNoAxesColumnIcon,
-  SettingsIcon,
-  StickyNoteIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { T, useGT } from "gt-react";
@@ -27,7 +21,8 @@ import {
 import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { useIssuesSupported, usePullRequestsSupported } from "../../state/environments";
-import { countActiveMemos, formatMemoBadgeCount } from "../memo/memoLaunch.logic";
+import { countActiveMemos } from "../memo/memoLaunch.logic";
+import { MemoSidebarIcon } from "../memo/MemoSidebarIcon";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -228,8 +223,10 @@ const SidebarMemoUtilityItem = memo(function SidebarMemoUtilityItem({
       : EMPTY_MEMOS_ATOM,
   );
   const memos = AsyncResult.getOrElse(memosResult, () => ({ memos: [] })).memos;
-  const badgeText = formatMemoBadgeCount(countActiveMemos(memos));
-  const label = gt("便签");
+  const activeCount = countActiveMemos(memos);
+  const label = activeCount > 0 ? gt("便签 ({count})", { count: activeCount }) : gt("便签");
+  const tooltip =
+    activeCount > 0 ? gt("便签 · {count} 条待办", { count: activeCount }) : gt("便签 · 暂无待办");
 
   return (
     <SidebarMenuItem className="shrink-0">
@@ -239,7 +236,6 @@ const SidebarMemoUtilityItem = memo(function SidebarMemoUtilityItem({
             <SidebarMenuButton
               aria-label={label}
               aria-pressed={isOpen}
-              className="size-7"
               isActive={isOpen}
               onClick={() => {
                 toggleOpen();
@@ -247,21 +243,11 @@ const SidebarMemoUtilityItem = memo(function SidebarMemoUtilityItem({
               }}
               size="icon"
             >
-              <span className="relative inline-flex items-center justify-center">
-                <StickyNoteIcon />
-                {badgeText !== null ? (
-                  <span
-                    aria-hidden="true"
-                    className="pointer-events-none absolute -top-2 -right-2 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-warning px-1 text-3xs font-semibold leading-none text-background shadow-xs tabular-nums"
-                  >
-                    {badgeText}
-                  </span>
-                ) : null}
-              </span>
+              <MemoSidebarIcon count={activeCount} />
             </SidebarMenuButton>
           }
         />
-        <TooltipPopup side="top">{label}</TooltipPopup>
+        <TooltipPopup side="top">{tooltip}</TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
   );
@@ -281,7 +267,7 @@ function SidebarUtilityItem({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} className="size-7" onClick={onClick} size="icon">
+            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
               {icon}
             </SidebarMenuButton>
           }

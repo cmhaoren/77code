@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, MemoId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ChatAttachmentId,
+  ChatImageAttachment,
+  UploadChatImageAttachment,
+} from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
 export const MemoStatus = Schema.Literals(["todo", "in_progress", "done"]);
@@ -22,6 +27,7 @@ export const Memo = Schema.Struct({
   threadId: Schema.NullOr(ThreadId),
   threadTitle: Schema.NullOr(Schema.String),
   projectId: Schema.NullOr(ProjectId),
+  attachments: Schema.Array(ChatImageAttachment),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
@@ -45,6 +51,7 @@ export const MemoCreateInput = Schema.Struct({
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
   threadTitle: Schema.optional(Schema.NullOr(Schema.String)),
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  attachments: Schema.optional(Schema.Array(UploadChatImageAttachment)),
 });
 export type MemoCreateInput = typeof MemoCreateInput.Type;
 
@@ -54,6 +61,8 @@ export const MemoUpdateInput = Schema.Struct({
   content: Schema.optional(Schema.String),
   status: Schema.optional(MemoStatus),
   color: Schema.optional(MemoColor),
+  attachments: Schema.optional(Schema.Array(UploadChatImageAttachment)),
+  keepAttachmentIds: Schema.optional(Schema.Array(ChatAttachmentId)),
 });
 export type MemoUpdateInput = typeof MemoUpdateInput.Type;
 
@@ -82,6 +91,7 @@ export type MemoStartLaunchInput = typeof MemoStartLaunchInput.Type;
 export const MemoStartInput = Schema.Struct({
   id: MemoId,
   launch: Schema.optional(MemoStartLaunchInput),
+  targetThreadId: Schema.optional(ThreadId),
 });
 export type MemoStartInput = typeof MemoStartInput.Type;
 

@@ -1,4 +1,5 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -15,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import * as ServerConfig from "../../../config.ts";
 import * as MemoService from "../../../memos/MemoService.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -81,6 +83,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     Layer.mock(ServerSettings.ServerSettingsService)({}),
     SqlitePersistence.layerMemory,
+    ServerConfig.layerTest(process.cwd(), { prefix: "t3-memo-handlers-" }).pipe(
+      Layer.provideMerge(NodeServices.layer),
+    ),
     NodeCrypto.layer,
   );
   const layer = McpToolAccess.HandlersLayer.layer(MemosHandlers.layer).pipe(

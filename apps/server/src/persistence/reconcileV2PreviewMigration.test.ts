@@ -86,6 +86,7 @@ describe("V2 preview upgrade", () => {
         [104, "ProjectionProjectsTrackedFolders"],
         [105, "TaskFolders"],
         [106, "Memos"],
+        [107, "MemoAttachments"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -215,6 +216,7 @@ describe("V2 preview upgrade", () => {
         [104, "ProjectionProjectsTrackedFolders"],
         [105, "TaskFolders"],
         [106, "Memos"],
+        [107, "MemoAttachments"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
