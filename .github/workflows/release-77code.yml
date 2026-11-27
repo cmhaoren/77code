@@ -55,18 +55,22 @@ jobs:
           "prerelease=$($isPrerelease.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Resolved 77 Code release version: $raw (tag: v$raw, prerelease: $isPrerelease)"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup Vite+ & workspace dependencies
+        uses: ./.github/actions/setup-ci-deps
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: package.json
-          cache: "pnpm"
-
-      - name: Install dependencies
+      - name: Ensure Electron runtime is installed
         shell: pwsh
-        run: pnpm install --frozen-lockfile
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build resource monitor
+        shell: pwsh
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target x86_64-pc-windows-msvc
 
       - name: Build Windows NSIS installer & update manifest
         shell: pwsh
