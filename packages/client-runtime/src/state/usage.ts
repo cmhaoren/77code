@@ -73,6 +73,16 @@ export async function refreshUsage({
       const unsubscribe = registry.subscribe(presentation, abortWhenDisconnected);
       abortWhenDisconnected();
       try {
+        if (input.boundProvidersOnly === true) {
+          registry.refresh(query);
+          if (!controller.signal.aborted) {
+            await executeAtomQuery(registry, query, {
+              reportFailure: false,
+              signal: controller.signal,
+            });
+          }
+          return;
+        }
         const ratesResult = await runAtomCommand(
           registry,
           server.refreshUsageRates,

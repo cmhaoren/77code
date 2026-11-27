@@ -1396,11 +1396,26 @@ export function createServerEnvironmentAtoms<R, E>(
     Atom.make((get) => {
       const settings = get(settingsValueAtom(environmentId));
       const aliases = settings?.usageModelAliases ?? {};
+      const instances = settings?.providerInstances ?? {};
       return JSON.stringify([
         get(usagePricesAtom(environmentId)),
         Object.keys(aliases)
           .sort()
           .map((model) => [model, aliases[model]]),
+        Object.entries(instances)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([id, instance]) => {
+            const config = instance.config as Readonly<Record<string, unknown>> | undefined;
+            return [
+              id,
+              instance.driver,
+              instance.enabled,
+              config?.enabled,
+              config?.source,
+              config?.agentId,
+              config?.commandPath,
+            ];
+          }),
       ]);
     }).pipe(Atom.withLabel(`environment-data:server:usage-scan-settings:${environmentId}`)),
   );

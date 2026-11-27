@@ -288,29 +288,137 @@ export function formatRelativeHourShort(
   return formatDateTimeShort(hourStart, timeZone, hour12, locale);
 }
 
-export function makeWindow(
-  days: number,
-  now = new Date(),
-  resolution: UsageResolution = "day",
-): UsageSummaryInput {
-  let timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  let format: Intl.DateTimeFormat;
+function resolveCalendarZone(explicitTimeZone?: string): {
+  readonly timeZone: string;
+  readonly format: Intl.DateTimeFormat;
+} {
+  let timeZone = explicitTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   try {
-    format = new Intl.DateTimeFormat("en-CA", {
+    const format = new Intl.DateTimeFormat("en-CA", {
       timeZone,
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
     });
+    return { timeZone, format };
   } catch {
     timeZone = "UTC";
-    format = new Intl.DateTimeFormat("en-CA", {
+    const format = new Intl.DateTimeFormat("en-CA", {
       timeZone: "UTC",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
     });
+    return { timeZone, format };
   }
+}
+
+function parseIsoDayParts(day: string): readonly [number, number, number] {
+  const [year = 0, month = 1, dayOfMonth = 1] = day
+    .split("-")
+    .map((part) => Number.parseInt(part, 10));
+  return [year, month, dayOfMonth];
+}
+
+function startOfDayUtcMs(
+  year: number,
+  month: number,
+  dayOfMonth: number,
+  timeZone: string,
+): number {
+  const formatter = dateTimeFormatter("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const targetWallMs = Date.UTC(year, month - 1, dayOfMonth, 0, 0, 0);
+  const wallMsOf = (utcMs: number): number => {
+    let y = 0;
+    let m = 1;
+    let d = 1;
+    let h = 0;
+    let min = 0;
+    let s = 0;
+    for (const part of formatter.formatToParts(new Date(utcMs))) {
+      const value = Number.parseInt(part.value, 10);
+      if (part.type === "year") y = value;
+      else if (part.type === "month") m = value;
+      else if (part.type === "day") d = value;
+      else if (part.type === "hour") h = value === 24 ? 0 : value;
+      else if (part.type === "minute") min = value;
+      else if (part.type === "second") s = value;
+    }
+    return Date.UTC(y, m - 1, d, h, min, s);
+  };
+  let utcMs = targetWallMs;
+  for (let i = 0; i < 3; i += 1) {
+    const diff = targetWallMs - wallMsOf(utcMs);
+    if (diff === 0) break;
+    utcMs += diff;
+  }
+  return utcMs;
+}
+
+export type UsageCalendarPeriod = "today" | "week" | "month";
+
+export function makeCalendarWindow(
+  period: UsageCalendarPeriod,
+  now = new Date(),
+  explicitTimeZone?: string,
+): UsageSummaryInput {
+  const { timeZone, format } = resolveCalendarZone(explicitTimeZone);
+  const today = format.format(now);
+  const [year, month, dayOfMonth] = parseIsoDayParts(today);
+
+  if (period === "today") {
+    const startOfTodayMs = startOfDayUtcMs(year, month, dayOfMonth, timeZone);
+    const untilTimeMs = Math.max(
+      startOfTodayMs + 60_000,
+      Math.floor(now.getTime() / 60_000) * 60_000,
+    );
+    const sinceTimeMs = Math.max(startOfTodayMs, untilTimeMs - 24 * HOUR_MS);
+    return {
+      sinceDay: UsageDay.make(today),
+      untilDay: UsageDay.make(today),
+      timeZone,
+      resolution: "hour",
+      sinceTime: new Date(sinceTimeMs).toISOString(),
+      untilTime: new Date(untilTimeMs).toISOString(),
+    };
+  }
+
+  if (period === "week") {
+    const utcDayOfWeek = new Date(Date.UTC(year, month - 1, dayOfMonth)).getUTCDay();
+    const daysSinceMonday = (utcDayOfWeek + 6) % 7;
+    const monday = new Date(Date.UTC(year, month - 1, dayOfMonth - daysSinceMonday));
+    return {
+      sinceDay: UsageDay.make(monday.toISOString().slice(0, 10)),
+      untilDay: UsageDay.make(today),
+      timeZone,
+      resolution: "day",
+    };
+  }
+
+  const monthStart = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`;
+  return {
+    sinceDay: UsageDay.make(monthStart),
+    untilDay: UsageDay.make(today),
+    timeZone,
+    resolution: "day",
+  };
+}
+
+export function makeWindow(
+  days: number,
+  now = new Date(),
+  resolution: UsageResolution = "day",
+): UsageSummaryInput {
+  const { timeZone, format } = resolveCalendarZone();
   const untilDay = format.format(now);
   if (resolution === "hour") {
     const untilTimeMs = Math.floor(now.getTime() / 60_000) * 60_000;
@@ -327,9 +435,7 @@ export function makeWindow(
     };
   }
   // Use calendar arithmetic in UTC; fixed millisecond subtraction crosses DST days incorrectly.
-  const [year = 0, month = 1, dayOfMonth = 1] = untilDay
-    .split("-")
-    .map((part) => Number.parseInt(part, 10));
+  const [year, month, dayOfMonth] = parseIsoDayParts(untilDay);
   const start = new Date(Date.UTC(year, month - 1, dayOfMonth - (days - 1)));
   return {
     sinceDay: UsageDay.make(start.toISOString().slice(0, 10)),

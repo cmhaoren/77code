@@ -24,23 +24,33 @@ afterEach(() => {
 });
 
 describe("Usage page preferences", () => {
-  it("round-trips hidden providers and reads older saves without them", () => {
-    saveUsagePagePreferences({ metric: "cost", windowDays: 7, hiddenProviders: ["codex"] });
-    expect(readUsagePagePreferences().hiddenProviders).toEqual(["codex"]);
-
-    values.set(key, '{"metric":"tokens","windowDays":30}');
-    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 30 });
+  it("defaults to tokens and today when storage is empty", () => {
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", period: "today" });
   });
 
-  // regression: #10189 an invalid saved usage selection was never replaced
+  it("round-trips hidden providers and reads saves without them", () => {
+    saveUsagePagePreferences({
+      metric: "limits",
+      period: "week",
+      hiddenProviders: ["codex", "droid"],
+    });
+    expect(readUsagePagePreferences().hiddenProviders).toEqual(["codex", "droid"]);
+
+    values.set(key, '{"metric":"tokens","period":"month"}');
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", period: "month" });
+  });
+
+  // regression: #10189 an invalid or legacy saved usage selection falls back and is replaced on next save
   it.each([
     "not-json",
-    '{"metric":"unknown","windowDays":7}',
-    '{"metric":"cost","windowDays":365}',
-  ])("replaces invalid preferences on the next save: %s", (value) => {
+    '{"metric":"unknown","period":"week"}',
+    '{"metric":"cost","windowDays":7,"hiddenProviders":["codex"]}',
+    '{"metric":"tokens","windowDays":30}',
+    '{"metric":"limits","windowDays":30}',
+  ])("falls back to defaults and replaces invalid or legacy preferences: %s", (value) => {
     values.set(key, value);
-    expect(readUsagePagePreferences()).toEqual({ metric: "limits", windowDays: 30 });
-    saveUsagePagePreferences({ metric: "tokens", windowDays: 7 });
-    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", windowDays: 7 });
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", period: "today" });
+    saveUsagePagePreferences({ metric: "tokens", period: "week" });
+    expect(readUsagePagePreferences()).toEqual({ metric: "tokens", period: "week" });
   });
 });

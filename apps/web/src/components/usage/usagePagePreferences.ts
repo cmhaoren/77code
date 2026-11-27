@@ -5,13 +5,13 @@ import { getLocalStorageItem, setLocalStorageItem } from "../../hooks/useLocalSt
 
 const STORAGE_KEY = "t3code:usage-page-preferences:v1";
 const UsagePagePreferencesSchema = Schema.Struct({
-  metric: Schema.Literals(["cost", "tokens", "limits"]),
-  windowDays: Schema.Literals([1, 7, 30, 90]),
+  metric: Schema.Literals(["tokens", "limits"]),
+  period: Schema.Literals(["today", "week", "month"]),
   hiddenProviders: Schema.optional(Schema.Array(UsageProviderKind)),
 });
 export type UsagePagePreferences = typeof UsagePagePreferencesSchema.Type;
 
-const DEFAULT_PREFERENCES: UsagePagePreferences = { metric: "limits", windowDays: 30 };
+const DEFAULT_PREFERENCES: UsagePagePreferences = { metric: "tokens", period: "today" };
 
 export function readUsagePagePreferences(): UsagePagePreferences {
   try {

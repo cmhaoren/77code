@@ -685,7 +685,7 @@ function PoolWindowRow({
 }
 
 function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
-  const color = barColor(pool.driver);
+  const color = barColor(pool.driver, pool.id);
   const label =
     pool.accounts[0]?.limits.group?.label ?? providerClients.get(pool.driver)?.label ?? pool.title;
   const windows = displayLimitWindows(pool);

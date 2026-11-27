@@ -17,6 +17,7 @@ export const UsageProviderKind = Schema.Literals([
   "pi",
   "muse",
   "dsh",
+  "droid",
 ]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
@@ -146,6 +147,7 @@ export const UsageSummaryInput = Schema.Struct({
   /** Accept an immediate answer from the last scan; its sources are marked refreshing. */
   provisional: Schema.optional(Schema.Boolean),
   modelFilter: Schema.optional(UsageModelFilter),
+  boundProvidersOnly: Schema.optional(Schema.Boolean),
 });
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
 

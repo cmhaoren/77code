@@ -55,7 +55,12 @@ const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof Ga
   },
 };
 
-export function barColor(driver: ServerProvider["driver"]): string {
+export function barColor(driver: ServerProvider["driver"], groupId?: string): string {
+  if (driver === "acpRegistry") {
+    if (groupId === "acpRegistry:factory-droid") return PROVIDER_PRESENTATION.droid.color;
+    if (groupId === "acpRegistry:deepseek-harness") return PROVIDER_PRESENTATION.dsh.color;
+    return "var(--foreground)";
+  }
   const presentation = Object.values(PROVIDER_PRESENTATION).find(
     (entry) => entry.driverKind === driver,
   );
@@ -405,9 +410,12 @@ export function UsageLimitsSection({
       .map((provider) => PROVIDER_PRESENTATION[provider].driverKind),
   );
   const hideDsh = hiddenProviders.has("dsh");
+  const hideDroid = hiddenProviders.has("droid");
   const isVisible = (driver: ServerProvider["driver"], groupId: string | undefined): boolean => {
     if (driver === "acpRegistry") {
-      return !(hideDsh && groupId === "acpRegistry:deepseek-harness");
+      if (groupId === "acpRegistry:deepseek-harness") return !hideDsh;
+      if (groupId === "acpRegistry:factory-droid") return !hideDroid;
+      return true;
     }
     return !hiddenDrivers.has(driver);
   };
@@ -415,7 +423,7 @@ export function UsageLimitsSection({
     [...presentations].flatMap(([id, presentation]) => {
       if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(id)) return [];
       const config = presentation.serverConfig;
-      if ((hiddenDrivers.size === 0 && !hideDsh) || config === null) {
+      if ((hiddenDrivers.size === 0 && !hideDsh && !hideDroid) || config === null) {
         return [[id, presentation] as const];
       }
       return [

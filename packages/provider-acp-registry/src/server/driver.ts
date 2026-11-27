@@ -89,6 +89,7 @@ import {
 } from "./factoryUsageLimits.ts";
 import { isDeepSeekHarnessInstance } from "./deepseekIdentity.ts";
 import { type DshUsageLimitsResult, readDshUsageLimits } from "./dshUsageLimits.ts";
+import { droidUsageReader } from "./droidUsage.ts";
 import { dshUsageReader } from "./dshUsage.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
@@ -689,7 +690,7 @@ export type AcpRegistryDriverEnv =
 export const AcpRegistryDriver: ProviderDriver<
   AcpRegistrySettings,
   AcpRegistryDriverEnv,
-  Path.Path
+  FileSystem.FileSystem | Path.Path
 > = {
   driverKind: DRIVER_KIND,
   metadata: {
@@ -699,7 +700,7 @@ export const AcpRegistryDriver: ProviderDriver<
   },
   configSchema: AcpRegistrySettings,
   defaultConfig: () => decodeSettings({}),
-  usage: dshUsageReader,
+  usage: [dshUsageReader, droidUsageReader],
   create: Effect.fn("AcpRegistryDriver.create")(function* ({
     instanceId,
     displayName,
@@ -1060,6 +1061,12 @@ export const AcpRegistryDriver: ProviderDriver<
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
+      ...(isFactoryDroid
+        ? {
+            refreshOnInterval: (currentSnapshot: ServerProvider) =>
+              currentSnapshot.status !== "ready",
+          }
+        : {}),
       // Inspection may fetch the registry when its disk cache is missing; creation must not wait on that.
       initialSnapshot: () => buildInitialAcpRegistrySnapshot(readinessInput),
       checkProvider,

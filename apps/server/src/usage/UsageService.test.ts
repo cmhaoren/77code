@@ -4256,4 +4256,193 @@ describe("UsageService", () => {
       );
     }),
   );
+
+  it.effect(
+    "scans only enabled bound providers and skips LiteLLM network fetches when boundProvidersOnly is true",
+    () =>
+      Effect.gen(function* () {
+        const { transcript, home } = yield* setup;
+        const codexDir = NodePath.join(home, "codex", "sessions");
+        const grokDir = NodePath.join(home, "grok");
+        const factorySessionsDir = NodePath.join(home, "factory-home", "sessions", "-D-dstest");
+        const droidSettingsPath = NodePath.join(factorySessionsDir, "droid-sess-1.settings.json");
+        const mtimeSec = Date.parse("2026-08-01T10:00:00Z") / 1000;
+
+        yield* Effect.promise(async () => {
+          await NodeFSP.writeFile(transcript, claudeLine(1, 15, "claude-fable-5"));
+          await NodeFSP.mkdir(codexDir, { recursive: true });
+          await NodeFSP.writeFile(
+            NodePath.join(codexDir, "codex.jsonl"),
+            [
+              { type: "session_meta", payload: { id: "codex-disabled" } },
+              { type: "turn_context", payload: { model: "gpt-6-astra" } },
+              {
+                type: "event_msg",
+                timestamp: "2026-08-01T10:00:00Z",
+                payload: {
+                  type: "token_count",
+                  info: { last_token_usage: { input_tokens: 5, output_tokens: 99 } },
+                },
+              },
+            ]
+              .map((line) => encodeUnknownJsonString(line))
+              .join("\n") + "\n",
+          );
+          await NodeFSP.mkdir(grokDir, { recursive: true });
+          await NodeFSP.mkdir(factorySessionsDir, { recursive: true });
+          await NodeFSP.writeFile(
+            droidSettingsPath,
+            JSON.stringify({
+              model: "custom:gpt-5.4",
+              tokenUsage: {
+                inputTokens: 40,
+                cacheReadTokens: 10,
+                cacheCreationTokens: 0,
+                outputTokens: 25,
+                thinkingTokens: 5,
+              },
+            }),
+          );
+          await NodeFSP.utimes(droidSettingsPath, mtimeSec, mtimeSec);
+        });
+
+        let fetchCalls = 0;
+        const serviceLayer = layerService({
+          prefix: "usage-service-bound-only",
+          home,
+          onRatesFetch: () => {
+            fetchCalls += 1;
+          },
+          settings: {
+            providerInstances: {
+              [ProviderInstanceId.make("claudeAgent")]: {
+                driver: ProviderDriverKind.make("claudeAgent"),
+                enabled: true,
+                config: { homePath: NodePath.join(home, "claude") },
+              },
+              [ProviderInstanceId.make("codex")]: {
+                driver: ProviderDriverKind.make("codex"),
+                enabled: false,
+                config: { homePath: NodePath.join(home, "codex") },
+              },
+              [ProviderInstanceId.make("acp-droid")]: {
+                driver: ProviderDriverKind.make("acpRegistry"),
+                enabled: true,
+                environment: [
+                  {
+                    name: "FACTORY_HOME",
+                    value: NodePath.join(home, "factory-home"),
+                    sensitive: false,
+                  },
+                ],
+                config: { source: "registry", agentId: "factory-droid" },
+              },
+            },
+          },
+        });
+
+        const summary = yield* Effect.gen(function* () {
+          const service = yield* UsageService.make;
+          return yield* service.readSummary({ ...WINDOW, boundProvidersOnly: true });
+        }).pipe(Effect.scoped, Effect.provide(serviceLayer));
+
+        assert.strictEqual(fetchCalls, 0);
+        assert.strictEqual(summary.pricing.status, "unavailable");
+
+        const providers = summary.buckets.map((bucket) => bucket.provider);
+        assert.include(providers, "claude");
+        assert.include(providers, "droid");
+        assert.notInclude(providers, "codex");
+        assert.notInclude(providers, "grok");
+        assert.notInclude(providers, "dsh");
+
+        const sourceProviders = summary.sources.map((source) => source.fingerprint.provider);
+        assert.include(sourceProviders, "claude");
+        assert.include(sourceProviders, "droid");
+        assert.notInclude(sourceProviders, "codex");
+        assert.notInclude(sourceProviders, "grok");
+        assert.notInclude(sourceProviders, "dsh");
+
+        const droidBucket = summary.buckets.find((bucket) => bucket.provider === "droid");
+        assert.strictEqual(droidBucket?.model, "custom:gpt-5.4");
+        assert.deepStrictEqual(droidBucket?.totals, {
+          uncachedInputTokens: 40,
+          cachedInputTokens: 10,
+          cacheCreationTokens: 0,
+          outputTokens: 25,
+          reasoningTokens: 5,
+        });
+
+        // When DSH ACP is enabled and Droid is disabled/absent, DSH scans and Droid is skipped.
+        const dshSessionsDir = NodePath.join(home, "dsh-home", "sessions", "sess-1");
+        yield* Effect.promise(async () => {
+          await NodeFSP.mkdir(dshSessionsDir, { recursive: true });
+          const zstd = NodeZlib.zstdCompressSync(
+            [
+              JSON.stringify({ type: "session", version: 4, id: "dsh-sess-1" }),
+              JSON.stringify({
+                type: "assistant/message",
+                seq: 1,
+                time: Date.parse("2026-08-01T10:00:00Z"),
+                data: {
+                  usage: { inputTokens: 15, outputTokens: 9 },
+                  message: { source: { model: "deepseek-v4.1-flash" } },
+                },
+              }),
+            ].join("\n") + "\n",
+          );
+          await NodeFSP.writeFile(NodePath.join(dshSessionsDir, "session.v4.jsonl.zstd"), zstd);
+        });
+
+        const dshOnlySummary = yield* Effect.gen(function* () {
+          const service = yield* UsageService.make;
+          return yield* service.readSummary({ ...WINDOW, boundProvidersOnly: true });
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            layerService({
+              prefix: "usage-service-dsh-bound-only",
+              home,
+              onRatesFetch: () => {
+                fetchCalls += 1;
+              },
+              settings: {
+                providerInstances: {
+                  [ProviderInstanceId.make("claudeAgent")]: {
+                    driver: ProviderDriverKind.make("claudeAgent"),
+                    enabled: false,
+                  },
+                  [ProviderInstanceId.make("codex")]: {
+                    driver: ProviderDriverKind.make("codex"),
+                    enabled: false,
+                  },
+                  [ProviderInstanceId.make("acp-dsh")]: {
+                    driver: ProviderDriverKind.make("acpRegistry"),
+                    enabled: true,
+                    environment: [
+                      {
+                        name: "DSH_HOME",
+                        value: NodePath.join(home, "dsh-home"),
+                        sensitive: false,
+                      },
+                    ],
+                    config: { source: "registry", agentId: "deepseek-harness" },
+                  },
+                },
+              },
+            }),
+          ),
+        );
+
+        assert.strictEqual(fetchCalls, 0);
+        assert.deepStrictEqual(
+          dshOnlySummary.buckets.map((bucket) => bucket.provider),
+          ["dsh"],
+        );
+        assert.deepStrictEqual(
+          dshOnlySummary.sources.map((source) => source.fingerprint.provider),
+          ["dsh"],
+        );
+      }),
+  );
 });

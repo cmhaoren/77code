@@ -1,6 +1,7 @@
 import {
   type ProviderInstanceConfig,
   ProviderInstanceId,
+  resolveProviderInstanceEnabled,
   USAGE_CONTRACT_VERSION,
   type ServerSettings as ServerSettingsValue,
   type UsageProviderKind,
@@ -32,10 +33,12 @@ import { formatMalformedUsageWarning } from "@t3tools/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
+import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import type { ProviderDriver } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import type {
   ProviderUsageInstance,
+  ProviderUsageReader,
   TranscriptUsageFormat,
   UsageRecord,
 } from "@t3tools/provider-core/server/usage";
@@ -81,17 +84,32 @@ const STALE_TEMP_DIRECTORY_MS = 60 * 60 * 1000;
 
 const TRANSCRIPT_READ_CONCURRENCY = 4;
 
-const transcriptReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
-  driver.usage?.kind === "transcripts" ? [{ driver, reader: driver.usage }] : [],
+const isReaderArray = <Config, UsageR>(
+  usage: ProviderUsageReader<Config, UsageR> | ReadonlyArray<ProviderUsageReader<Config, UsageR>>,
+): usage is ReadonlyArray<ProviderUsageReader<Config, UsageR>> => Array.isArray(usage);
+
+function driverUsageReaders<Config, R, UsageR>(
+  driver: ProviderDriver<Config, R, UsageR>,
+): ReadonlyArray<ProviderUsageReader<Config, UsageR>> {
+  if (driver.usage === undefined) return [];
+  return isReaderArray(driver.usage) ? driver.usage : [driver.usage];
+}
+
+const allUsageReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
+  driverUsageReaders(driver).map((reader) => ({ driver, reader })),
 );
 
-const scanReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
-  driver.usage?.kind === "scan" ? [{ driver, reader: driver.usage }] : [],
+const transcriptReaders = allUsageReaders.flatMap(({ driver, reader }) =>
+  reader.kind === "transcripts" ? [{ driver, reader }] : [],
+);
+
+const scanReaders = allUsageReaders.flatMap(({ driver, reader }) =>
+  reader.kind === "scan" ? [{ driver, reader }] : [],
 );
 
 const providerRateModels = new Map(
-  BUILT_IN_USAGE_DRIVERS.flatMap(({ usage }) =>
-    usage?.rateModel === undefined ? [] : [[usage.provider, usage.rateModel] as const],
+  allUsageReaders.flatMap(({ reader }) =>
+    reader.rateModel === undefined ? [] : [[reader.provider, reader.rateModel] as const],
   ),
 );
 
@@ -359,14 +377,24 @@ export const make = Effect.gen(function* () {
   const usageInstances = Effect.fn("UsageService.usageInstances")(function* <Config>(
     driver: ProviderDriver<Config, unknown, unknown>,
     settings: ServerSettingsValue,
+    boundProvidersOnly: boolean,
   ) {
+    const instanceMap = boundProvidersOnly
+      ? deriveProviderInstanceConfigMap(settings)
+      : settings.providerInstances;
     const entries: Array<
       readonly [ProviderInstanceId, Pick<ProviderInstanceConfig, "config" | "environment">, boolean]
-    > = Object.entries(settings.providerInstances)
-      .filter(([, instance]) => instance.driver === driver.driverKind)
+    > = Object.entries(instanceMap)
+      .filter(
+        ([, instance]) =>
+          instance.driver === driver.driverKind &&
+          (!boundProvidersOnly || resolveProviderInstanceEnabled(instance)),
+      )
       .map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const);
-    // History in the driver's default home stays counted after every instance moves elsewhere; readers dedupe shared directories.
-    entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
+    if (!boundProvidersOnly) {
+      // History in the driver's default home stays counted after every instance moves elsewhere; readers dedupe shared directories.
+      entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
+    }
     const decodeConfig = Schema.decodeUnknownOption(driver.configSchema);
     return yield* Effect.forEach(
       entries,
@@ -389,15 +417,17 @@ export const make = Effect.gen(function* () {
     settings: ServerSettingsValue,
     retentionCutoffMs: number,
     awaitRefresh: boolean,
+    boundProvidersOnly: boolean,
   ) {
     const dirs: Array<TranscriptSource> = [];
     const pending: Array<ScannedDir> = [];
     const seen = new Set<string>();
     for (const { driver, reader } of transcriptReaders) {
       const { provider, format } = reader;
-      const directories = yield* Effect.forEach(
-        yield* usageInstances(driver, settings),
-        (instance) => reader.directories(instance, { awaitRefresh }),
+      const instances = yield* usageInstances(driver, settings, boundProvidersOnly);
+      if (instances.length === 0) continue;
+      const directories = yield* Effect.forEach(instances, (instance) =>
+        reader.directories(instance, { awaitRefresh }),
       );
       for (const { dir: directory, fileName, refreshing } of directories.flat()) {
         if (refreshing) {
@@ -780,13 +810,22 @@ export const make = Effect.gen(function* () {
     retentionCutoffMs: number,
     awaitRefresh: boolean,
     fromMemory: boolean,
+    boundProvidersOnly: boolean,
   ) {
     const scans = Effect.forEach(
       scanReaders,
       ({ driver, reader }) =>
-        usageInstances(driver, settings).pipe(
+        usageInstances(driver, settings, boundProvidersOnly).pipe(
           Effect.flatMap((instances) =>
-            reader.scan({ instances, settings, windowStartMs, retentionCutoffMs, awaitRefresh }),
+            instances.length === 0
+              ? Effect.succeed([] as const)
+              : reader.scan({
+                  instances,
+                  settings,
+                  windowStartMs,
+                  retentionCutoffMs,
+                  awaitRefresh,
+                }),
           ),
           Effect.flatMap((sources) =>
             Effect.forEach(sources, ({ volumeId, ...source }) =>
@@ -877,10 +916,14 @@ export const make = Effect.gen(function* () {
         : Math.max(0, startedAtMs - settings.usageHistoryRetentionDays * 24 * 60 * 60 * 1000);
 
     const awaitRefresh = input.awaitRefresh === true;
+    const boundProvidersOnly = input.boundProvidersOnly === true;
     const collect = Effect.gen(function* () {
-      const resolved = yield* resolveTranscriptDirs(settings, retentionCutoffMs, awaitRefresh).pipe(
-        Effect.provideContext(readerContext),
-      );
+      const resolved = yield* resolveTranscriptDirs(
+        settings,
+        retentionCutoffMs,
+        awaitRefresh,
+        boundProvidersOnly,
+      ).pipe(Effect.provideContext(readerContext));
       // A window no complete scan has read would show partial totals, so every directory must cover it.
       // Saved files are keyed by path, so two providers reading one directory keep only one parse.
       const fromMemory =
@@ -892,7 +935,11 @@ export const make = Effect.gen(function* () {
         );
       const [, scanned] = yield* Effect.all(
         [
-          fromMemory ? loadSavedRates : provisional ? ensureRates(false) : Effect.void,
+          boundProvidersOnly || fromMemory
+            ? loadSavedRates
+            : provisional
+              ? ensureRates(false)
+              : Effect.void,
           collectDirs(
             resolved,
             windowStartMs,
@@ -900,6 +947,7 @@ export const make = Effect.gen(function* () {
             retentionCutoffMs,
             awaitRefresh,
             fromMemory,
+            boundProvidersOnly,
           ),
         ],
         { concurrency: 2 },
@@ -907,7 +955,7 @@ export const make = Effect.gen(function* () {
       return { scannedDirs: scanned, fromMemory };
     });
     const [{ scannedDirs, fromMemory }] = yield* Effect.all(
-      [collect, provisional ? Effect.void : ensureRates(false)],
+      [collect, boundProvidersOnly || provisional ? Effect.void : ensureRates(false)],
       { concurrency: 2 },
     );
 
@@ -992,7 +1040,7 @@ export const make = Effect.gen(function* () {
       }
     }
     // A saved answer prices with saved rates and the full scan after it refetches.
-    if (!fromMemory) yield* refreshForUnlistedModels(rateModels);
+    if (!fromMemory && !boundProvidersOnly) yield* refreshForUnlistedModels(rateModels);
 
     const summaryPricing = pricing();
 
@@ -1216,6 +1264,7 @@ export const make = Effect.gen(function* () {
       input.awaitRefresh === true,
       provisional,
       input.modelFilter ?? null,
+      input.boundProvidersOnly === true,
     ]);
 
   const readSummary = Effect.fn("UsageService.readSummary")(function* (

@@ -2,7 +2,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { UsageSource } from "@t3tools/contracts";
 
-import { formatHourShort, formatTokens, makeWindow, usageSourceMessages } from "./usageFormat.ts";
+import {
+  formatHourShort,
+  formatTokens,
+  makeCalendarWindow,
+  makeWindow,
+  usageSourceMessages,
+} from "./usageFormat.ts";
 
 function malformedSource(count: number, overrides: Partial<UsageSource> = {}): UsageSource {
   return {
@@ -182,5 +188,121 @@ describe("token formatting", () => {
     expect(formatTokens(999_999)).toBe("1M");
     expect(formatTokens(999_999_999)).toBe("1B");
     expect(formatTokens(-999_999)).toBe("-1M");
+  });
+});
+
+describe("calendar usage windows", () => {
+  it("builds today hourly windows across regular times, midnight, non-UTC zones, and 25h DST fall-back", () => {
+    const regularUtc = makeCalendarWindow("today", new Date("2026-08-11T12:37:42.123Z"), "UTC");
+    expect(regularUtc).toEqual({
+      sinceDay: "2026-08-11",
+      untilDay: "2026-08-11",
+      timeZone: "UTC",
+      resolution: "hour",
+      sinceTime: "2026-08-11T00:00:00.000Z",
+      untilTime: "2026-08-11T12:37:00.000Z",
+    });
+
+    const midnightUtc = makeCalendarWindow("today", new Date("2026-08-11T00:00:15.000Z"), "UTC");
+    expect(midnightUtc).toEqual({
+      sinceDay: "2026-08-11",
+      untilDay: "2026-08-11",
+      timeZone: "UTC",
+      resolution: "hour",
+      sinceTime: "2026-08-11T00:00:00.000Z",
+      untilTime: "2026-08-11T00:01:00.000Z",
+    });
+
+    // 2026-08-11 09:15:30+08:00 -> local midnight is 2026-08-10T16:00:00.000Z.
+    const shanghai = makeCalendarWindow(
+      "today",
+      new Date("2026-08-11T01:15:30.000Z"),
+      "Asia/Shanghai",
+    );
+    expect(shanghai).toEqual({
+      sinceDay: "2026-08-11",
+      untilDay: "2026-08-11",
+      timeZone: "Asia/Shanghai",
+      resolution: "hour",
+      sinceTime: "2026-08-10T16:00:00.000Z",
+      untilTime: "2026-08-11T01:15:00.000Z",
+    });
+
+    const shanghaiMidnight = makeCalendarWindow(
+      "today",
+      new Date("2026-08-10T16:00:00.000Z"),
+      "Asia/Shanghai",
+    );
+    expect(shanghaiMidnight).toEqual({
+      sinceDay: "2026-08-11",
+      untilDay: "2026-08-11",
+      timeZone: "Asia/Shanghai",
+      resolution: "hour",
+      sinceTime: "2026-08-10T16:00:00.000Z",
+      untilTime: "2026-08-10T16:01:00.000Z",
+    });
+
+    // 2026-11-01 in America/New_York is a 25-hour DST fall-back day; clamp to <= 24h.
+    const dstFallBack = makeCalendarWindow(
+      "today",
+      new Date("2026-11-02T04:45:20.000Z"),
+      "America/New_York",
+    );
+    expect(dstFallBack.sinceDay).toBe("2026-11-01");
+    expect(dstFallBack.untilDay).toBe("2026-11-01");
+    expect(dstFallBack.resolution).toBe("hour");
+    const durationMs = Date.parse(dstFallBack.untilTime!) - Date.parse(dstFallBack.sinceTime!);
+    expect(durationMs).toBeGreaterThan(0);
+    expect(durationMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+    expect(dstFallBack.sinceTime).toBe("2026-11-01T04:45:00.000Z");
+    expect(dstFallBack.untilTime).toBe("2026-11-02T04:45:00.000Z");
+  });
+
+  it("builds week windows starting on Monday including cross-month and cross-year boundaries", () => {
+    expect(makeCalendarWindow("week", new Date("2026-08-10T10:00:00Z"), "UTC")).toEqual({
+      sinceDay: "2026-08-10",
+      untilDay: "2026-08-10",
+      timeZone: "UTC",
+      resolution: "day",
+    });
+    expect(makeCalendarWindow("week", new Date("2026-08-12T10:00:00Z"), "UTC")).toEqual({
+      sinceDay: "2026-08-10",
+      untilDay: "2026-08-12",
+      timeZone: "UTC",
+      resolution: "day",
+    });
+    expect(makeCalendarWindow("week", new Date("2026-08-16T23:59:59Z"), "UTC")).toEqual({
+      sinceDay: "2026-08-10",
+      untilDay: "2026-08-16",
+      timeZone: "UTC",
+      resolution: "day",
+    });
+    expect(makeCalendarWindow("week", new Date("2026-07-01T12:00:00Z"), "UTC")).toEqual({
+      sinceDay: "2026-06-29",
+      untilDay: "2026-07-01",
+      timeZone: "UTC",
+      resolution: "day",
+    });
+    expect(makeCalendarWindow("week", new Date("2027-01-01T12:00:00Z"), "UTC")).toEqual({
+      sinceDay: "2026-12-28",
+      untilDay: "2027-01-01",
+      timeZone: "UTC",
+      resolution: "day",
+    });
+  });
+
+  it("builds month windows from the first day of the month to today", () => {
+    expect(makeCalendarWindow("month", new Date("2026-08-27T01:00:00Z"), "Asia/Shanghai")).toEqual({
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-27",
+      timeZone: "Asia/Shanghai",
+      resolution: "day",
+    });
+    expect(makeCalendarWindow("month", new Date("2026-08-01T00:00:00Z"), "Etc/Unknown")).toEqual({
+      sinceDay: "2026-08-01",
+      untilDay: "2026-08-01",
+      timeZone: "UTC",
+      resolution: "day",
+    });
   });
 });

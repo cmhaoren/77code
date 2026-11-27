@@ -11,5 +11,6 @@ export function providerColors(scheme: "light" | "dark"): Record<UsageProviderKi
     pi: "#4d9f8a",
     muse: "#0866ff",
     dsh: "#4d6bfe",
+    droid: "#ee6018",
   };
 }

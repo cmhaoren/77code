@@ -46,13 +46,15 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
     const presentation = Atom.make({
       connection: { phase: "connected" },
     } as EnvironmentPresentation | null);
+    let reads = 0;
     const query = Atom.make(
       Effect.promise(() => {
+        reads += 1;
         scanStarted.resolve();
         return scan.promise;
       }),
     );
-    return { environmentId, rates, scan, scanStarted, presentation, query };
+    return { environmentId, rates, scan, scanStarted, presentation, query, reads: () => reads };
   });
   function get(environmentId: EnvironmentId) {
     const environment = environments.find((entry) => entry.environmentId === environmentId);
@@ -60,6 +62,7 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
     return environment;
   }
   const requested: { environmentId: EnvironmentId; input: UsageSummaryInput }[] = [];
+  let ratesCalls = 0;
   const options = {
     registry,
     environmentIds: environments.map((entry) => entry.environmentId),
@@ -78,21 +81,30 @@ function harness(ids = ["a"], modelFilters: Record<string, UsageModelFilter> = {
         run: (
           _registry: AtomRegistry.AtomRegistry,
           { environmentId }: { environmentId: EnvironmentId },
-        ) =>
-          Effect.promise(() => get(environmentId).rates.promise).pipe(
+        ) => {
+          ratesCalls += 1;
+          return Effect.promise(() => get(environmentId).rates.promise).pipe(
             Effect.flatMap((result) =>
               AsyncResult.isSuccess(result)
                 ? Effect.succeed(result.value)
                 : Effect.failCause(result.cause),
             ),
-          ),
+          );
+        },
       },
     },
     presentations: {
       presentationAtom: (environmentId: EnvironmentId) => get(environmentId).presentation,
     },
   } satisfies Parameters<typeof refreshUsage>[0];
-  return { registry, environments, requested, refresh: () => refreshUsage(options) };
+  return {
+    registry,
+    environments,
+    requested,
+    refresh: () => refreshUsage(options),
+    refreshWith: (nextInput: UsageSummaryInput) => refreshUsage({ ...options, input: nextInput }),
+    ratesCalls: () => ratesCalls,
+  };
 }
 
 describe("manual usage refresh", () => {
@@ -134,6 +146,21 @@ describe("manual usage refresh", () => {
       { environmentId: "filtered", input: { ...input, modelFilter } },
       { environmentId: "plain", input },
     ]);
+  });
+
+  it("refreshes only the summary when bound providers skip the pricing rescan", async () => {
+    const {
+      environments: [environment],
+      ratesCalls,
+      refreshWith,
+    } = harness();
+    const entry = environment!;
+    const refreshing = refreshWith({ ...input, boundProvidersOnly: true });
+    entry.rates.resolve(AsyncResult.success(pricing));
+    entry.scan.resolve(summary);
+    await refreshing;
+    expect(ratesCalls()).toBe(0);
+    expect(entry.reads()).toBeGreaterThan(0);
   });
 
   it("settles when an environment disconnects during the rescan", async () => {

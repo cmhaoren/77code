@@ -1105,12 +1105,32 @@ function TeamOrchestrationDialogContent(props: TeamOrchestrationDialogProps) {
                     </div>
 
                     <div className="space-y-1.5">
-                      <div className="text-xs font-medium">
-                        <T>启用审核维度</T>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-medium">
+                          <T>启用审核维度</T>
+                        </span>
+                        <span className="text-2xs text-muted-foreground">
+                          <T>难易度：高（攻坚）· 中（核心）· 轻（常规）</T>
+                        </span>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
                         {TEAM_REVIEW_ANGLE_META.map((angle) => {
                           const checked = draft.reviewer.angles.includes(angle.id);
+                          const difficultyBadge =
+                            angle.difficulty === "complex"
+                              ? {
+                                  label: gt("高"),
+                                  className: "bg-warning-surface text-warning-foreground",
+                                }
+                              : angle.difficulty === "standard"
+                                ? {
+                                    label: gt("中"),
+                                    className: "bg-primary/15 text-primary",
+                                  }
+                                : {
+                                    label: gt("轻"),
+                                    className: "bg-muted text-muted-foreground",
+                                  };
                           return (
                             <button
                               key={angle.id}
@@ -1126,6 +1146,14 @@ function TeamOrchestrationDialogContent(props: TeamOrchestrationDialogProps) {
                             >
                               {checked ? <CheckIcon className="size-3 text-primary" /> : null}
                               <span>{angle.shortLabel}</span>
+                              <span
+                                className={cn(
+                                  "rounded-full px-1.5 py-0.5 text-3xs leading-none font-medium",
+                                  difficultyBadge.className,
+                                )}
+                              >
+                                {difficultyBadge.label}
+                              </span>
                             </button>
                           );
                         })}
@@ -1158,12 +1186,37 @@ function TeamOrchestrationDialogContent(props: TeamOrchestrationDialogProps) {
                               (item) => item.id === angleId,
                             )!;
                             const override = draft.reviewer.angleModelOverrides[angleId] ?? null;
+                            const difficultyBadge =
+                              meta.difficulty === "complex"
+                                ? {
+                                    label: gt("高 · 攻坚"),
+                                    className: "bg-warning-surface text-warning-foreground",
+                                  }
+                                : meta.difficulty === "standard"
+                                  ? {
+                                      label: gt("中 · 核心"),
+                                      className: "bg-primary/15 text-primary",
+                                    }
+                                  : {
+                                      label: gt("轻 · 常规"),
+                                      className: "bg-muted text-muted-foreground",
+                                    };
                             return (
                               <div
                                 key={angleId}
                                 className="flex flex-wrap items-center justify-between gap-2"
                               >
-                                <span className="text-xs text-muted-foreground">{meta.label}</span>
+                                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                                  <span>{meta.label}</span>
+                                  <span
+                                    className={cn(
+                                      "rounded-full px-1.5 py-0.5 text-3xs leading-none font-medium",
+                                      difficultyBadge.className,
+                                    )}
+                                  >
+                                    {difficultyBadge.label}
+                                  </span>
+                                </span>
                                 <TeamOrchestrationModelSlot
                                   environmentId={environmentId}
                                   workspaceCwd={workspaceCwd}

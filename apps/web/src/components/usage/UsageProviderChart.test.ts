@@ -16,6 +16,7 @@ describe("buildPeriodColumns", () => {
           ["claude" as const, { costUsd: 20, totalTokens: 200 }],
           ["pi" as const, { costUsd: 5, totalTokens: 50 }],
           ["muse" as const, { costUsd: 7, totalTokens: 70 }],
+          ["droid" as const, { costUsd: 0, totalTokens: 30 }],
         ]),
       },
     ],
@@ -30,19 +31,21 @@ describe("buildPeriodColumns", () => {
     ],
   ]);
 
-  it("keeps band values absolute rather than cumulative", () => {
-    const [first] = buildPeriodColumns(days, byDay, "cost");
+  it("keeps token band values absolute rather than cumulative", () => {
+    const [first] = buildPeriodColumns(days, byDay);
 
     expect(first?.bands).toEqual([
-      { provider: "codex", value: 10 },
-      { provider: "claude", value: 20 },
+      { provider: "codex", value: 100 },
+      { provider: "claude", value: 200 },
       { provider: "grok", value: 0 },
       { provider: "cursor", value: 0 },
       { provider: "opencode", value: 0 },
       { provider: "antigravity", value: 0 },
-      { provider: "pi", value: 5 },
-      { provider: "muse", value: 7 },
+      { provider: "pi", value: 50 },
+      { provider: "muse", value: 70 },
       { provider: "dsh", value: 0 },
+      { provider: "droid", value: 30 },
     ]);
+    expect(first?.total).toBe(450);
   });
 });

@@ -24,11 +24,14 @@ export interface TeamNormCardDefinition {
   readonly defaultContent: string;
 }
 
+export type TeamReviewAngleDifficulty = "complex" | "standard" | "routine";
+
 export interface TeamReviewAngleMeta {
   readonly id: TeamReviewAngleId;
   readonly cardId: TeamNormCardId;
   readonly label: string;
   readonly shortLabel: string;
+  readonly difficulty: TeamReviewAngleDifficulty;
   readonly description: string;
 }
 
@@ -38,6 +41,7 @@ export const TEAM_REVIEW_ANGLE_META: ReadonlyArray<TeamReviewAngleMeta> = [
     cardId: "review.correctness",
     label: "正确性与对抗复现",
     shortLabel: "正确性",
+    difficulty: "complex",
     description: "边界条件、竞态、状态覆写、异常处理与可复现缺陷",
   },
   {
@@ -45,6 +49,7 @@ export const TEAM_REVIEW_ANGLE_META: ReadonlyArray<TeamReviewAngleMeta> = [
     cardId: "review.blast-radius",
     label: "影响范围与回归风险",
     shortLabel: "影响范围",
+    difficulty: "complex",
     description: "调用方、跨包契约、持久化兼容、默认值与潜在回归面",
   },
   {
@@ -52,6 +57,7 @@ export const TEAM_REVIEW_ANGLE_META: ReadonlyArray<TeamReviewAngleMeta> = [
     cardId: "review.spec-alignment",
     label: "需求与方案一致性",
     shortLabel: "需求一致",
+    difficulty: "standard",
     description: "逐条核对需求目标、边界约定、漏项与范围漂移",
   },
   {
@@ -59,6 +65,7 @@ export const TEAM_REVIEW_ANGLE_META: ReadonlyArray<TeamReviewAngleMeta> = [
     cardId: "review.maintainability",
     label: "规范与可维护性",
     shortLabel: "规范架构",
+    difficulty: "routine",
     description: "模块边界、类型安全、代码库惯例、重复逻辑与可维护度",
   },
   {
@@ -66,6 +73,7 @@ export const TEAM_REVIEW_ANGLE_META: ReadonlyArray<TeamReviewAngleMeta> = [
     cardId: "review.visual-ux",
     label: "视觉与交互验收",
     shortLabel: "视觉交互",
+    difficulty: "standard",
     description: "信息层级、状态反馈、空态/错态、窄屏与明暗主题表现",
   },
   {
@@ -73,6 +81,7 @@ export const TEAM_REVIEW_ANGLE_META: ReadonlyArray<TeamReviewAngleMeta> = [
     cardId: "review.security-data",
     label: "数据与安全",
     shortLabel: "安全数据",
+    difficulty: "complex",
     description: "权限校验、输入边界、路径安全、密钥保护与数据一致性",
   },
   {
@@ -80,6 +89,7 @@ export const TEAM_REVIEW_ANGLE_META: ReadonlyArray<TeamReviewAngleMeta> = [
     cardId: "review.performance",
     label: "性能基线",
     shortLabel: "性能",
+    difficulty: "standard",
     description: "热路径开销、N+1、内存/监听泄漏与渲染抖动",
   },
 ];

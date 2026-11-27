@@ -502,19 +502,19 @@ const USAGE_COMMAND_LABELS: Record<
   (typeof METRIC_OPTIONS)[number]["command"] | (typeof WINDOW_OPTIONS)[number]["command"],
   string
 > = {
-  "usage.cost": msg("Usage: Cost"),
   "usage.tokens": msg("Usage: Tokens"),
   "usage.limits": msg("Usage: Limits"),
-  "usage.period.day": msg("Usage: Period: Past 24h"),
-  "usage.period.week": msg("Usage: Period: 7 days"),
-  "usage.period.month": msg("Usage: Period: 30 days"),
-  "usage.period.quarter": msg("Usage: Period: 90 days"),
+  "usage.period.day": msg("Usage: Period: Today"),
+  "usage.period.week": msg("Usage: Period: This week"),
+  "usage.period.month": msg("Usage: Period: This month"),
 };
 
 const LATE_COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "view.reopenClosed": msg("Reopen Closed Tab"),
   "preview.focusUrl": msg("Preview: Focus URL"),
   "preview.find": msg("Preview: Find on Page"),
+  "usage.cost": msg("Usage: Cost"),
+  "usage.period.quarter": msg("Usage: Period: 90 days"),
 };
 
 export function commandLabel(command: KeybindingCommand, resolve: MessageResolver = m): string {

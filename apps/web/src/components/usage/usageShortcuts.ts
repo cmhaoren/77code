@@ -1,21 +1,24 @@
 import { msg } from "gt-react";
 import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { UsageCalendarPeriod } from "@t3tools/shared/usageFormat";
 import type { UsageChartMetric } from "./UsageProviderChart";
 import { resolveShortcutCommand, type ShortcutEventLike } from "../../keybindings";
 
 export type UsageMetric = UsageChartMetric | "limits";
 export const METRIC_OPTIONS = [
-  { value: "cost", label: msg("Cost"), command: "usage.cost" },
   { value: "tokens", label: msg("Tokens"), command: "usage.tokens" },
   { value: "limits", label: msg("Limits"), command: "usage.limits" },
 ] as const satisfies readonly { value: UsageMetric; label: string; command: KeybindingCommand }[];
 
 export const WINDOW_OPTIONS = [
-  { days: 1, label: msg("Past 24h"), command: "usage.period.day" },
-  { days: 7, label: msg("7 days"), command: "usage.period.week" },
-  { days: 30, label: msg("30 days"), command: "usage.period.month" },
-  { days: 90, label: msg("90 days"), command: "usage.period.quarter" },
-] as const;
+  { period: "today", label: msg("Today"), command: "usage.period.day" },
+  { period: "week", label: msg("This week"), command: "usage.period.week" },
+  { period: "month", label: msg("This month"), command: "usage.period.month" },
+] as const satisfies readonly {
+  period: UsageCalendarPeriod;
+  label: string;
+  command: KeybindingCommand;
+}[];
 
 export function resolveUsageShortcut(
   event: ShortcutEventLike & { target: EventTarget | null },

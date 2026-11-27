@@ -129,10 +129,20 @@ export interface ProviderDriver<Config, R = never, UsageR = never> {
   readonly create: (
     input: ProviderDriverCreateInput<Config>,
   ) => Effect.Effect<ProviderInstance, ProviderDriverError, R | Scope.Scope>;
-  readonly usage?: ProviderUsageReader<Config, UsageR>;
+  readonly usage?:
+    | ProviderUsageReader<Config, UsageR>
+    | ReadonlyArray<ProviderUsageReader<Config, UsageR>>;
 }
 
 export type AnyProviderDriver<R = never, UsageR = unknown> = ProviderDriver<any, R, UsageR>;
 
+type UsageReaderEnv<Reader> = Reader extends ProviderUsageReader<any, infer R> ? R : never;
+
 export type ProviderUsageReaderEnv<Driver> =
-  Driver extends ProviderDriver<any, any, infer UsageR> ? UsageR : never;
+  Driver extends ProviderDriver<any, any, infer UsageR>
+    ? UsageR
+    : Driver extends { readonly usage?: infer Usage }
+      ? Usage extends ReadonlyArray<infer Reader>
+        ? UsageReaderEnv<Reader>
+        : UsageReaderEnv<Usage>
+      : never;

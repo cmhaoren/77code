@@ -391,6 +391,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     getSettings: Effect.succeed(settings),
     streamSettings: Stream.empty,
     haveSettingsChanged: () => false,
+    refreshOnInterval: (snapshot) => snapshot.status !== "ready",
     initialSnapshot: () => getSnapshot,
     checkProvider: checkProvider(),
     enrichSnapshot: ({ publishSnapshot }) =>
