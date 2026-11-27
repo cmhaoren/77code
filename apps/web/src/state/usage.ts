@@ -113,6 +113,15 @@ export function mergeAnsweredUsage(
 
 const NO_HIDDEN_PROVIDERS: ReadonlySet<UsageProviderKind> = new Set();
 
+function sameSet<T>(left: ReadonlySet<T> | null, right: ReadonlySet<T> | null): boolean {
+  if (left === right) return true;
+  if (left === null || right === null || left.size !== right.size) return false;
+  for (const item of left) {
+    if (!right.has(item)) return false;
+  }
+  return true;
+}
+
 function withoutProviders(
   environments: readonly EnvironmentUsageStatus[],
   hiddenProviders: ReadonlySet<UsageProviderKind>,
@@ -177,8 +186,8 @@ export function useUsage(
   let current = derived;
   if (
     derived.environments !== environments ||
-    derived.selectedEnvironmentIds !== selectedEnvironmentIds ||
-    derived.hiddenProviders !== hiddenProviders
+    !sameSet(derived.selectedEnvironmentIds, selectedEnvironmentIds) ||
+    !sameSet(derived.hiddenProviders, hiddenProviders)
   ) {
     current = deriveSelection(environments, selectedEnvironmentIds, hiddenProviders);
     setDerived(current);
@@ -217,10 +226,11 @@ export function useUsage(
   >(null);
   if (
     answeredCount > 0 &&
-    (lastAnswered?.merged !== merged ||
+    (lastAnswered === null ||
+      lastAnswered.merged !== merged ||
       lastAnswered.window !== input ||
-      lastAnswered.selection !== selectedEnvironmentIds ||
-      lastAnswered.hidden !== hiddenProviders)
+      !sameSet(lastAnswered.selection, selectedEnvironmentIds) ||
+      !sameSet(lastAnswered.hidden, hiddenProviders))
   ) {
     setLastAnswered({
       window: input,
@@ -230,7 +240,9 @@ export function useUsage(
     });
   }
   const kept =
-    lastAnswered?.selection === selectedEnvironmentIds && lastAnswered.hidden === hiddenProviders
+    lastAnswered !== null &&
+    sameSet(lastAnswered.selection, selectedEnvironmentIds) &&
+    sameSet(lastAnswered.hidden, hiddenProviders)
       ? lastAnswered
       : null;
   const shown =
