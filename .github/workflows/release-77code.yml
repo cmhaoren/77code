@@ -120,14 +120,14 @@ jobs:
           if ($exists) {
             gh release upload $tag @assets --clobber --repo "${{ github.repository }}"
           } else {
-            $args = @(
+            $releaseArgs = @(
               "release", "create", $tag,
               "--repo", "${{ github.repository }}",
               "--title", "77 Code $tag",
               "--generate-notes"
             )
-            if ($prerelease) { $args += "--prerelease" }
-            $args += $assets
-            gh @args
+            if ($prerelease) { $releaseArgs += "--prerelease" }
+            $releaseArgs += $assets
+            gh @releaseArgs
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

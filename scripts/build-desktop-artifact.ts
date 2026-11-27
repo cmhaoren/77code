@@ -1064,7 +1064,9 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   ];
 }
 
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
+// Guardrail against accidental loose node_modules explosion (~19 Electron + ~11 Cursor SDK +
+// ~9 app natives + ~27 server natives incl. transcribe-cpp + ~29 V8 server-compile-cache ≈ 97 files).
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 120;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
